@@ -1,0 +1,79 @@
+<Window x:Class="MarkdownViewer.MainWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:wv="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+ Title="Markdown Viewer" Width="1180" Height="820" MinWidth="800" MinHeight="540"
+ WindowStartupLocation="CenterScreen" AllowDrop="True" PreviewDrop="Window_Drop" PreviewDragOver="Window_DragOver"
+ PreviewKeyDown="Window_PreviewKeyDown" Loaded="Window_Loaded" Closing="Window_Closing">
+ <Window.Icon><DrawingImage><DrawingImage.Drawing><DrawingGroup>
+  <GeometryDrawing Brush="#376A54" Geometry="M 4,0 L 28,0 Q 32,0 32,4 L 32,28 Q 32,32 28,32 L 4,32 Q 0,32 0,28 L 0,4 Q 0,0 4,0"/>
+  <GeometryDrawing Brush="White" Geometry="M 6,10 L 9,10 13,15 17,10 20,10 20,23 17,23 17,15 13,20 9,15 9,23 6,23 Z M 23,10 L 26,10 26,18 29,18 24.5,23 20,18 23,18 Z"/>
+ </DrawingGroup></DrawingImage.Drawing></DrawingImage></Window.Icon>
+ <Grid>
+  <Grid.RowDefinitions><RowDefinition Height="60"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="30"/></Grid.RowDefinitions>
+  <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="12,0">
+   <DockPanel LastChildFill="True">
+    <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
+     <Button x:Name="BackButton" Style="{StaticResource IconButton}" Content="&#xE72B;" ToolTip="Back (Alt+Left)" AutomationProperties.Name="Back" Click="Back_Click" IsEnabled="False"/>
+     <Button x:Name="ForwardButton" Style="{StaticResource IconButton}" Content="&#xE72A;" ToolTip="Forward (Alt+Right)" AutomationProperties.Name="Forward" Click="Forward_Click" IsEnabled="False"/>
+     <Border Width="1" Height="22" Background="{DynamicResource Line}" Margin="9,0"/>
+     <Button Click="Open_Click" ToolTip="Open Markdown file (Ctrl+O)"><StackPanel Orientation="Horizontal"><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8E5;" Margin="0,0,8,0" VerticalAlignment="Center"/><TextBlock Text="Open" FontWeight="SemiBold"/></StackPanel></Button>
+     <Button x:Name="RecentButton" Style="{StaticResource IconButton}" Width="26" Content="&#xE70D;" ToolTip="Recent files" AutomationProperties.Name="Recent files" Click="Recent_Click"/>
+     <Border Width="1" Height="22" Background="{DynamicResource Line}" Margin="9,0"/>
+     <Button Style="{StaticResource IconButton}" Content="&#xE8FD;" ToolTip="Toggle outline (Ctrl+B)" AutomationProperties.Name="Toggle outline" Click="Outline_Click"/>
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+     <Button Style="{StaticResource IconButton}" Content="&#xE721;" ToolTip="Find in document (Ctrl+F)" AutomationProperties.Name="Find" Click="Find_Click"/>
+     <Button x:Name="ThemeButton" Style="{StaticResource IconButton}" Content="&#xE708;" ToolTip="Switch to dark theme" AutomationProperties.Name="Toggle theme" Click="Theme_Click"/>
+     <Border Width="1" Height="22" Background="{DynamicResource Line}" Margin="9,0"/>
+     <Button Style="{StaticResource IconButton}" Content="&#xE738;" ToolTip="Zoom out (Ctrl+-)" AutomationProperties.Name="Zoom out" Click="ZoomOut_Click"/>
+     <Button x:Name="ZoomButton" Content="100%" Width="55" Padding="2,8" ToolTip="Reset zoom (Ctrl+0)" Click="ZoomReset_Click"/>
+     <Button Style="{StaticResource IconButton}" Content="&#xE710;" ToolTip="Zoom in (Ctrl++)" AutomationProperties.Name="Zoom in" Click="ZoomIn_Click"/>
+     <Button x:Name="MoreButton" Style="{StaticResource IconButton}" Content="&#xE712;" ToolTip="More actions" AutomationProperties.Name="More actions" Click="More_Click"/>
+    </StackPanel>
+    <TextBlock x:Name="DocumentName" Text="Markdown Viewer" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="16,0"/>
+   </DockPanel>
+  </Border>
+  <Border x:Name="FindBar" Grid.Row="1" Visibility="Collapsed" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="16,8">
+   <DockPanel LastChildFill="False">
+    <TextBlock Text="Find" VerticalAlignment="Center" Margin="0,0,12,0"/>
+    <TextBox x:Name="FindBox" Width="260" Padding="8,5" Background="{DynamicResource Surface}" Foreground="{DynamicResource Ink}" BorderBrush="{DynamicResource Line}" KeyDown="FindBox_KeyDown" TextChanged="FindBox_TextChanged" AutomationProperties.Name="Search document"/>
+    <Button Content="Previous" Click="FindPrevious_Click"/><Button Content="Next" Click="FindNext_Click"/>
+    <TextBlock x:Name="FindResult" VerticalAlignment="Center" Foreground="{DynamicResource Muted}" Margin="10,0"/>
+    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="Close find (Esc)" AutomationProperties.Name="Close find" Click="FindClose_Click"/>
+   </DockPanel>
+  </Border>
+  <Border x:Name="Notice" Grid.Row="2" Visibility="Collapsed" Background="{DynamicResource Panel}" Padding="18,10" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+   <DockPanel><Button DockPanel.Dock="Right" Content="Dismiss" Click="NoticeClose_Click"/><TextBlock x:Name="NoticeText" TextWrapping="Wrap" VerticalAlignment="Center"/></DockPanel>
+  </Border>
+  <Grid Grid.Row="3">
+   <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="236"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <Border x:Name="Sidebar" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+    <Grid Margin="16,26,16,16">
+     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <TextBlock Text="ON THIS PAGE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" Margin="10,0,0,16"/>
+     <Grid Grid.Row="1">
+      <ListBox x:Name="OutlineList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="Outline_SelectionChanged" AutomationProperties.Name="Document outline"/>
+      <TextBlock x:Name="OutlineEmpty" Text="Headings will appear here." FontSize="12" Foreground="{DynamicResource Muted}" Margin="10,8" TextWrapping="Wrap"/>
+     </Grid>
+     <StackPanel Grid.Row="2" Margin="10,16,0,0"><TextBlock Text="A little space to read." Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock Text="MARKDOWN VIEWER" Foreground="{DynamicResource Muted}" FontSize="9" Margin="0,7,0,0"/></StackPanel>
+    </Grid>
+   </Border>
+   <Grid Grid.Column="1" Background="{DynamicResource Surface}">
+    <wv:WebView2 x:Name="Reader" Visibility="Collapsed" DefaultBackgroundColor="White" AllowDrop="False" AllowExternalDrop="True"/>
+    <Grid x:Name="Welcome" Background="{DynamicResource Surface}">
+     <StackPanel MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="40,20,40,60">
+      <Border Background="{DynamicResource Panel}" CornerRadius="16" Width="76" Height="76" HorizontalAlignment="Left" Margin="0,0,0,28"><TextBlock Text="M↓" FontSize="28" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+      <TextBlock Text="Just you and the words." FontFamily="Georgia" FontSize="31" TextWrapping="Wrap" Margin="0,0,0,16"/>
+      <TextBlock Text="A quiet home for your Markdown. Open a file to give your notes, docs, and ideas room to breathe." Foreground="{DynamicResource Muted}" FontSize="15" LineHeight="25" TextWrapping="Wrap" Margin="0,0,0,26"/>
+      <StackPanel Orientation="Horizontal"><Button Content="Open a Markdown file" Background="{DynamicResource Hover}" Foreground="{DynamicResource Accent}" FontWeight="SemiBold" Padding="18,12" Margin="0" Click="Open_Click"/><TextBlock Text="Ctrl + O" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="16,0,0,0" FontSize="12"/></StackPanel>
+      <TextBlock Text="Or drop a .md file anywhere in this window" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,20,0,0"/>
+     </StackPanel>
+    </Grid>
+   </Grid>
+  </Grid>
+  <Border Grid.Row="4" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="16,0">
+   <DockPanel><TextBlock x:Name="DocumentStats" DockPanel.Dock="Right" Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="20,0,0,0"/><TextBlock x:Name="StatusText" Text="Ready to read" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center"/></DockPanel>
+  </Border>
+ </Grid>
+</Window>

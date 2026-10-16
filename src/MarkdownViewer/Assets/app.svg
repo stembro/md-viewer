@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 32 32">
+  <title>Markdown Viewer</title>
+  <rect width="32" height="32" rx="4" fill="#376a54"/>
+  <path fill="#ffffff" d="M6 10h3l4 5 4-5h3v13h-3v-8l-4 5-4-5v8H6z M23 10h3v8h3l-4.5 5-4.5-5h3z"/>
+</svg>
