@@ -1,5 +1,6 @@
 using MarkdownViewer.Rendering;
 using MarkdownViewer;
+using MarkdownViewer.Editing;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -39,7 +40,10 @@ var tests = new (string Name, Action Run)[]
     ("Empty documents are valid", EmptyDocument),
     ("Documents larger than 2 MiB retain their complete content", LargeDocument),
     ("Fast text comparison preserves newline semantics", TextComparison),
-    ("Page updates contain the same safe HTML as navigation", PageUpdates)
+    ("Page updates contain the same safe HTML as navigation", PageUpdates),
+    ("Formatting wraps, toggles and selects placeholders", InlineFormatting),
+    ("Block formatting respects selected lines and indentation", BlockFormatting),
+    ("Links and code fences retain selected text", InsertFormatting)
 };
 
 var failures = 0;
@@ -202,6 +206,53 @@ static string Body(RenderedDocument document)
     var start = document.Html.IndexOf(open, StringComparison.Ordinal) + open.Length;
     var end = document.Html.IndexOf("</main>", start, StringComparison.Ordinal);
     return document.Html[start..end];
+}
+
+static void InlineFormatting()
+{
+    var result = Format("Read these words.", 5, 11, "bold");
+    Equal("Read **these words**.", result.Text);
+    Equal("these words", result.Selected);
+    Equal("Read these words.", Format(result.Text, result.Start, result.Length, "bold").Text);
+    Equal("these words", Format("**these words**", 0, 15, "bold").Text);
+    var placeholder = Format("", 0, 0, "italic");
+    Equal("*italic text*", placeholder.Text);
+    Equal("italic text", placeholder.Selected);
+    Equal("~~words~~", Format("words", 0, 5, "strike").Text);
+    Equal("`code`", Format("code", 0, 4, "code").Text);
+}
+
+static void BlockFormatting()
+{
+    Equal("## Title\r\nNext", Format("# Title\r\nNext", 4, 0, "h2").Text);
+    Equal("Title", Format("## Title", 4, 0, "h2").Text);
+    Equal("Title", Format("### Title", 5, 0, "paragraph").Text);
+    Equal("- One\r\n- Two\r\nThree", Format("One\r\nTwo\r\nThree", 0, 10, "bullet").Text);
+    Equal("1. One\r\n2. Two", Format("- One\r\n- Two", 0, 12, "ordered").Text);
+    Equal("One\r\nTwo", Format("- One\r\n- Two", 0, 12, "bullet").Text);
+    Equal("  - [ ] Nested", Format("  - Nested", 4, 0, "task").Text);
+    Equal("> Quote", Format("Quote", 2, 0, "quote").Text);
+    Equal("Heading", Format("", 0, 0, "h1").Selected);
+    Equal("- [ ] Task", Format("", 0, 0, "task").Text);
+}
+
+static void InsertFormatting()
+{
+    var link = Format("Label", 0, 5, "link");
+    Equal("[Label](https://example.com)", link.Text);
+    Equal("https://example.com", link.Selected);
+    Equal("![alt text](image.png)", Format("", 0, 0, "image").Text);
+    Equal("[a\\]b](https://example.com)", Format("a]b", 0, 3, "link").Text);
+    var code = Format("```\r\ncode\r\n```", 0, 14, "codeblock");
+    Equal("````\r\n```\r\ncode\r\n```\r\n````", code.Text);
+    Equal("`` \u0060code\u0060 ``", Format("`code`", 0, 6, "code").Text);
+}
+
+static (string Text, int Start, int Length, string Selected) Format(string text, int start, int length, string command)
+{
+    var edit = MarkdownFormatting.Apply(text, start, length, command, "\r\n");
+    var result = text.Remove(edit.Offset, edit.Length).Insert(edit.Offset, edit.Text);
+    return (result, edit.SelectionStart, edit.SelectionLength, result.Substring(edit.SelectionStart, edit.SelectionLength));
 }
 
 static void TextComparison()

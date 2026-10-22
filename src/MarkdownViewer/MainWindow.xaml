@@ -5,6 +5,19 @@
  Title="Markdown Viewer" Width="1180" Height="820" MinWidth="800" MinHeight="540"
  WindowStartupLocation="CenterScreen" AllowDrop="True" PreviewDrop="Window_Drop" PreviewDragOver="Window_DragOver"
  PreviewKeyDown="Window_PreviewKeyDown" Loaded="Window_Loaded" Closing="Window_Closing">
+ <Window.Resources>
+  <Style x:Key="EditorMenuItemStyle" TargetType="MenuItem">
+   <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+   <Setter Property="Padding" Value="12,8"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
+    <Border x:Name="Plate" Background="Transparent" Padding="{TemplateBinding Padding}" CornerRadius="4"><ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/></Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Plate" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
+     <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Plate" Property="Opacity" Value="0.45"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+ </Window.Resources>
  <Window.Icon><DrawingImage><DrawingImage.Drawing><DrawingGroup>
   <GeometryDrawing Brush="#376A54" Geometry="M 4,0 L 28,0 Q 32,0 32,4 L 32,28 Q 32,32 28,32 L 4,32 Q 0,32 0,28 L 0,4 Q 0,0 4,0"/>
   <GeometryDrawing Brush="White" Geometry="M 6,10 L 9,10 13,15 17,10 20,10 20,23 17,23 17,15 13,20 9,15 9,23 6,23 Z M 23,10 L 26,10 26,18 29,18 24.5,23 20,18 23,18 Z"/>
@@ -20,7 +33,7 @@
      <Button Click="Open_Click" ToolTip="Open Markdown file (Ctrl+O)"><StackPanel Orientation="Horizontal"><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8E5;" Margin="0,0,8,0" VerticalAlignment="Center"/><TextBlock Text="Open" FontWeight="SemiBold"/></StackPanel></Button>
      <Button x:Name="RecentButton" Style="{StaticResource IconButton}" Width="26" Content="&#xE70D;" ToolTip="Recent files" AutomationProperties.Name="Recent files" Click="Recent_Click"/>
      <Border Width="1" Height="22" Background="{DynamicResource Line}" Margin="9,0"/>
-     <Button Style="{StaticResource IconButton}" Content="&#xE8FD;" ToolTip="Toggle outline (Ctrl+B)" AutomationProperties.Name="Toggle outline" Click="Outline_Click"/>
+     <Button Style="{StaticResource IconButton}" Content="&#xE8FD;" ToolTip="Toggle outline (Ctrl+Shift+B)" AutomationProperties.Name="Toggle outline" Click="Outline_Click"/>
     </StackPanel>
     <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
      <Button x:Name="ModeButton" Content="Edit" ToolTip="Edit this Markdown document" AutomationProperties.Name="Edit document" Click="Mode_Click" IsEnabled="False"/>
@@ -56,6 +69,9 @@
      <TextBlock Text="ON THIS PAGE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" Margin="10,0,0,16"/>
      <Grid Grid.Row="1">
       <ListBox x:Name="OutlineList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" SelectionChanged="Outline_SelectionChanged" AutomationProperties.Name="Document outline">
+       <ListBox.Template><ControlTemplate TargetType="ListBox">
+        <Border Background="{TemplateBinding Background}"><ScrollViewer Focusable="False" CanContentScroll="True" HorizontalScrollBarVisibility="Disabled"><ItemsPresenter/></ScrollViewer></Border>
+       </ControlTemplate></ListBox.Template>
        <ListBox.ItemTemplate><DataTemplate>
         <TextBlock Text="{Binding Text}" ToolTip="{Binding Text}" Margin="{Binding Indent}" TextTrimming="CharacterEllipsis"/>
        </DataTemplate></ListBox.ItemTemplate>
@@ -68,7 +84,65 @@
    <Grid Grid.Column="1" Background="{DynamicResource Surface}">
     <wv:WebView2 x:Name="Reader" Visibility="Collapsed" DefaultBackgroundColor="White" AllowDrop="False" AllowExternalDrop="True"/>
     <Border x:Name="EditorPanel" Visibility="Collapsed" Background="{DynamicResource Surface}">
-     <TextBox x:Name="Editor" AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Padding="54,42" FontFamily="Consolas" FontSize="14" Background="Transparent" Foreground="{DynamicResource Ink}" BorderThickness="0" SpellCheck.IsEnabled="False" UndoLimit="1000" AutomationProperties.Name="Markdown source editor" TextChanged="Editor_TextChanged"/>
+     <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <Border Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="12,6">
+       <WrapPanel VerticalAlignment="Center">
+        <WrapPanel.Resources>
+         <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+          <Setter Property="Focusable" Value="False"/><Setter Property="Padding" Value="9,7"/><Setter Property="MinWidth" Value="30"/>
+         </Style>
+        </WrapPanel.Resources>
+        <Button Content="Heading ▾" ToolTip="Choose a heading level" AutomationProperties.Name="Heading style" Tag="headings" Click="EditorMenu_Click"/>
+        <Border Width="1" Height="20" Background="{DynamicResource Line}" Margin="5,0"/>
+        <Button Content="B" FontWeight="Bold" ToolTip="Bold (Ctrl+B)" AutomationProperties.Name="Bold" Tag="bold" Click="Format_Click"/>
+        <Button Content="I" FontStyle="Italic" ToolTip="Italic (Ctrl+I)" AutomationProperties.Name="Italic" Tag="italic" Click="Format_Click"/>
+        <Button Content="S̶" ToolTip="Strikethrough" AutomationProperties.Name="Strikethrough" Tag="strike" Click="Format_Click"/>
+        <Button Content="&lt;/&gt;" FontFamily="Consolas" ToolTip="Inline code" AutomationProperties.Name="Inline code" Tag="code" Click="Format_Click"/>
+        <Button FontFamily="Segoe MDL2 Assets" Content="&#xE71B;" ToolTip="Insert link (Ctrl+K)" AutomationProperties.Name="Insert link" Tag="link" Click="Format_Click"/>
+        <Border Width="1" Height="20" Background="{DynamicResource Line}" Margin="5,0"/>
+        <Button Content="List ▾" ToolTip="Bullet list, numbered list, or checklist" AutomationProperties.Name="List style" Tag="lists" Click="EditorMenu_Click"/>
+        <Button Content="❞" FontSize="16" ToolTip="Block quote" AutomationProperties.Name="Block quote" Tag="quote" Click="Format_Click"/>
+        <Button Content="Insert ▾" ToolTip="Code block, image, table, or divider" AutomationProperties.Name="Insert Markdown" Tag="insert" Click="EditorMenu_Click"/>
+        <Border Width="1" Height="20" Background="{DynamicResource Line}" Margin="5,0"/>
+        <Button x:Name="EditorUndoButton" FontFamily="Segoe MDL2 Assets" Content="&#xE7A7;" ToolTip="Undo (Ctrl+Z)" AutomationProperties.Name="Undo" Tag="undo" Click="Format_Click" IsEnabled="False"/>
+        <Button x:Name="EditorRedoButton" FontFamily="Segoe MDL2 Assets" Content="&#xE7A6;" ToolTip="Redo (Ctrl+Y)" AutomationProperties.Name="Redo" Tag="redo" Click="Format_Click" IsEnabled="False"/>
+       </WrapPanel>
+      </Border>
+      <Grid x:Name="EditorHost" Grid.Row="1">
+       <Grid.Resources>
+        <Style TargetType="ScrollBar">
+         <Setter Property="Width" Value="12"/>
+         <Setter Property="Background" Value="{DynamicResource Surface}"/>
+         <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ScrollBar">
+          <Grid Background="{TemplateBinding Background}">
+           <Track x:Name="PART_Track" Orientation="{TemplateBinding Orientation}" IsDirectionReversed="True" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" ViewportSize="{TemplateBinding ViewportSize}" Value="{Binding Value, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+            <Track.DecreaseRepeatButton><RepeatButton x:Name="PageBefore" Command="ScrollBar.PageUpCommand" Focusable="False" Opacity="0"/></Track.DecreaseRepeatButton>
+            <Track.Thumb><Thumb>
+             <Thumb.Template><ControlTemplate TargetType="Thumb">
+              <Border x:Name="Grip" Background="{DynamicResource Line}" CornerRadius="4" Margin="2" MinHeight="20"/>
+              <ControlTemplate.Triggers>
+               <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Grip" Property="Background" Value="{DynamicResource Muted}"/></Trigger>
+               <Trigger Property="IsDragging" Value="True"><Setter TargetName="Grip" Property="Background" Value="{DynamicResource Accent}"/></Trigger>
+              </ControlTemplate.Triggers>
+             </ControlTemplate></Thumb.Template>
+            </Thumb></Track.Thumb>
+            <Track.IncreaseRepeatButton><RepeatButton x:Name="PageAfter" Command="ScrollBar.PageDownCommand" Focusable="False" Opacity="0"/></Track.IncreaseRepeatButton>
+           </Track>
+          </Grid>
+          <ControlTemplate.Triggers>
+           <Trigger Property="Orientation" Value="Horizontal">
+            <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
+            <Setter TargetName="PageBefore" Property="Command" Value="ScrollBar.PageLeftCommand"/>
+            <Setter TargetName="PageAfter" Property="Command" Value="ScrollBar.PageRightCommand"/>
+           </Trigger>
+          </ControlTemplate.Triggers>
+         </ControlTemplate></Setter.Value></Setter>
+         <Style.Triggers><Trigger Property="Orientation" Value="Horizontal"><Setter Property="Width" Value="Auto"/><Setter Property="Height" Value="12"/></Trigger></Style.Triggers>
+        </Style>
+       </Grid.Resources>
+      </Grid>
+     </Grid>
     </Border>
     <Grid x:Name="Welcome" Background="{DynamicResource Surface}">
      <StackPanel MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="40,20,40,60">

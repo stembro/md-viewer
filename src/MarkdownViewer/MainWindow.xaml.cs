@@ -423,7 +423,7 @@ public partial class MainWindow : Window
         FindResult.Text = "";
         FindBar.Visibility = Visibility.Collapsed;
         Editor.Focus();
-        Editor.CaretIndex = 0;
+        Editor.CaretOffset = 0;
     }
 
     private async Task ReturnToReadingModeAsync()
@@ -455,11 +455,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Editor_TextChanged(object sender, TextChangedEventArgs e)
+    private void Editor_TextChanged(object? sender, EventArgs e)
     {
         if (!_isEditing || _isLoadingEditor) return;
         _editorRevision++;
-        // TextBox.Text materializes the entire buffer. Inspect it once at save time,
+        // Text materializes the entire buffer. Inspect it once at save time,
         // rather than copying and normalizing a large document on every keystroke.
         _isDirty = true;
         if (_externalConflict)
@@ -775,7 +775,7 @@ public partial class MainWindow : Window
         {
             var text = Editor.Text;
             var needle = FindBox.Text;
-            var start = backwards ? Math.Max(0, Editor.SelectionStart - 1) : Editor.SelectionStart + Editor.SelectionLength;
+            var start = backwards ? Editor.SelectionStart : Editor.SelectionStart + Editor.SelectionLength;
             var match = backwards
                 ? (start > 0 ? text.LastIndexOf(needle, start - 1, StringComparison.OrdinalIgnoreCase) : -1)
                 : text.IndexOf(needle, Math.Min(start, text.Length), StringComparison.OrdinalIgnoreCase);
@@ -787,7 +787,7 @@ public partial class MainWindow : Window
             {
                 Editor.Focus();
                 Editor.Select(match, needle.Length);
-                Editor.ScrollToLine(Editor.GetLineIndexFromCharacterIndex(match));
+                Editor.ScrollToLine(Editor.Document.GetLineByOffset(match).LineNumber);
                 FindResult.Text = "Match found";
             }
             else FindResult.Text = "No matches";
@@ -814,6 +814,7 @@ public partial class MainWindow : Window
         Reader.DefaultBackgroundColor = _settings.DarkMode ? System.Drawing.Color.FromArgb(32, 36, 33) : System.Drawing.Color.FromArgb(255, 254, 250);
         ThemeButton.Content = _settings.DarkMode ? "\uE706" : "\uE708";
         ThemeButton.ToolTip = _settings.DarkMode ? "Switch to light theme" : "Switch to dark theme";
+        if (_editor is not null) ApplyEditorTheme(_editor);
         ApplyTitleBarTheme();
     }
     private void ApplyTitleBarTheme()
@@ -828,7 +829,7 @@ public partial class MainWindow : Window
     private void ZoomOut_Click(object sender, RoutedEventArgs e) => SetZoom(_settings.Zoom - .1);
     private void ZoomReset_Click(object sender, RoutedEventArgs e) => SetZoom(1);
     private void SetZoom(double zoom) { _settings.Zoom = Math.Clamp(Math.Round(zoom, 2), .5, 2.5); UpdateZoom(); }
-    private void UpdateZoom() { ZoomButton.Content = $"{_settings.Zoom:P0}"; if (Reader.CoreWebView2 is not null) Reader.ZoomFactor = _settings.Zoom; }
+    private void UpdateZoom() { ZoomButton.Content = $"{_settings.Zoom:P0}"; if (Reader.CoreWebView2 is not null) Reader.ZoomFactor = _settings.Zoom; if (_editor is not null) _editor.FontSize = 14 * _settings.Zoom; }
     private void ShowNotice(string text) { NoticeText.Text = text; Notice.Visibility = Visibility.Visible; }
     private void NoticeClose_Click(object sender, RoutedEventArgs e) => Notice.Visibility = Visibility.Collapsed;
 
@@ -845,6 +846,7 @@ public partial class MainWindow : Window
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (HandleEditorShortcut(key, Keyboard.Modifiers)) { e.Handled = true; return; }
         if (!IsAppShortcut(key, Keyboard.Modifiers)) return;
         e.Handled = true;
         var modifiers = Keyboard.Modifiers;

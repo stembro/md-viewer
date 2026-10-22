@@ -4,9 +4,14 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 using MarkdownViewer;
 using Microsoft.Web.WebView2.Wpf;
+using ICSharpCode.AvalonEdit;
+using ICSharpCode.AvalonEdit.Highlighting;
+using ICSharpCode.AvalonEdit.Document;
 
 internal static class IntegrationChecks
 {
@@ -21,7 +26,7 @@ internal static class IntegrationChecks
             .GetProperty("ProfileDirectory", BindingFlags.NonPublic | BindingFlags.Static)!
             .SetValue(null, Path.Combine(directory, "profile"));
         var path = Path.Combine(directory, "editing.md");
-        File.WriteAllText(path, "# First title\n\n" + string.Concat(Enumerable.Repeat("A paragraph to keep the page scrollable.\n\n", 100)));
+        File.WriteAllText(path, "# First title\n\nA **bold** paragraph with *emphasis*, `inline code`, and [a link](https://example.com).\n\n## A smaller heading\n\n- A bullet item\n- [ ] A task to do\n\n> A useful quotation.\n\n```csharp\nvar answer = 42;\n```\n\n" + string.Concat(Enumerable.Repeat("A paragraph to keep the page scrollable.\n\n", 100)));
         var app = new Application();
         var projectRoot = Path.GetFullPath(Path.Combine(directory, "..", ".."));
         var xaml = XDocument.Load(Path.Combine(projectRoot, "src", "MarkdownViewer", "App.xaml"));
@@ -45,8 +50,43 @@ internal static class IntegrationChecks
                 var preview = (WebView2)viewWindow.FindName("Reader");
                 var source = reader.CoreWebView2.Source;
                 var previewSource = preview.CoreWebView2.Source;
+                Equal<object?>(null, Field(editWindow, "_editor"), "Reading must not create an editor.");
+                editWindow.Activate();
                 Call(editWindow, "EnterEditMode");
-                var editor = (TextBox)editWindow.FindName("Editor");
+                var editor = (TextEditor)editWindow.FindName("Editor");
+                editor.Select(2, 11);
+                Call(editWindow, "ApplyFormatting", "bold");
+                Equal("# **First title**", editor.Document.GetText(editor.Document.GetLineByNumber(1)), "Toolbar must format the selection.");
+                editor.Undo();
+                Equal("# First title", editor.Document.GetText(editor.Document.GetLineByNumber(1)), "Toolbar formatting must undo in one step.");
+                editor.Redo();
+                Call(editWindow, "ApplyFormatting", "bold");
+                Equal("# First title", editor.Document.GetText(editor.Document.GetLineByNumber(1)), "Toolbar formatting must toggle off.");
+                using (var highlighter = new DocumentHighlighter(editor.Document, editor.SyntaxHighlighting))
+                    Equal(true, highlighter.HighlightLine(1).Sections.Any(s => s.Color.Foreground is not null), "Markdown headings must be highlighted.");
+                using (var highlighter = new DocumentHighlighter(new TextDocument("# Heading\n**bold** and *italic* and `code`\n```\n# inside code\n```\n## Outside code"), editor.SyntaxHighlighting))
+                {
+                    Equal(true, highlighter.HighlightLine(2).Sections.Any(s => s.Color.Name == "Bold"), "Bold syntax must be highlighted.");
+                    Equal(true, highlighter.HighlightLine(4).Sections.Any(s => s.Color.Name == "Code"), "Fenced code must keep its state across lines.");
+                    Equal(true, highlighter.HighlightLine(6).Sections.Any(s => s.Color.Name == "Heading"), "Highlighting must recover after a code fence.");
+                }
+                ((TextBox)editWindow.FindName("FindBox")).Text = "i";
+                editor.Select(4, 0);
+                await (Task)Call(editWindow, "FindAsync", true)!;
+                Equal(3, editor.SelectionStart, "Backward search must include the character immediately before the caret.");
+                var settings = Field(editWindow, "_settings")!;
+                settings.GetType().GetProperty("DarkMode")!.SetValue(settings, false);
+                Call(editWindow, "ApplyTheme");
+                editor.Select(13, 0);
+                await Task.Delay(150);
+                Snapshot(editWindow, Path.Combine(directory, "editor-light.png"));
+                settings.GetType().GetProperty("DarkMode")!.SetValue(settings, true);
+                Call(editWindow, "ApplyTheme");
+                Equal("#FFFFFFFF", editor.TextArea.Caret.CaretBrush.ToString(), "Dark-mode caret must have explicit high contrast.");
+                Equal(true, editor.Options.HighlightCurrentLine, "The current line must be visible.");
+                await Task.Delay(150);
+                Snapshot(editWindow, Path.Combine(directory, "editor-dark.png"));
+                Console.WriteLine("PASS  Native highlighting, dark caret, formatting, and single-step undo/redo.");
                 editor.AppendText("\r\n## Saved from editor\r\n");
                 var timer = Stopwatch.StartNew();
                 await Until(async () => await preview.ExecuteScriptAsync("!!document.getElementById('saved-from-editor')") == "true");
@@ -97,8 +137,17 @@ internal static class IntegrationChecks
         return app.Run(editWindow);
     }
 
-    private static object? Call(MainWindow window, string method) => typeof(MainWindow).GetMethod(method, Private)!.Invoke(window, null);
+    private static object? Call(MainWindow window, string method, params object?[] args) => typeof(MainWindow).GetMethod(method, Private)!.Invoke(window, args);
     private static object? Field(MainWindow window, string field) => typeof(MainWindow).GetField(field, Private)!.GetValue(window);
+    private static void Snapshot(MainWindow window, string path)
+    {
+        var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+    }
     private static void Close(MainWindow window)
     {
         typeof(MainWindow).GetField("_allowClose", Private)!.SetValue(window, true);

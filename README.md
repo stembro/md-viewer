@@ -3,13 +3,17 @@
 A small, native Windows Markdown reader with a quiet, document-first interface. Open a file, read it, and keep your place while the document updates.
 
 - Rendered Markdown with headings, lists, links, tables, quotes, and code blocks.
-- A source-edit mode with automatic saving after a short pause and a Ctrl+S save command.
+- A native source editor with Markdown syntax highlighting, a formatting toolbar, undo/redo, and automatic saving after a short pause.
 - Document outline, text search, zoom, and light/dark themes.
 - Recent files, drag and drop, and automatic reload when the file changes, including when a second viewer window has the same document open.
 - Relative local images and links to other Markdown documents.
 - Native WPF desktop window with an embedded WebView2 document surface.
 
 Raw HTML and scripts are disabled, and remote images are not fetched. Edit mode changes the Markdown source directly and saves after a short pause. Use Ctrl+S to save immediately. If another window changes the file while you have unsaved edits, Markdown Viewer keeps your text and asks before replacing the newer file.
+
+In Edit mode, select text and use the toolbar to apply formatting. With no selection, inline actions insert an editable example; headings and lists apply to the current line. The toolbar offers heading levels 1–6, bold, italic, strikethrough, inline code, links, bullet and numbered lists, checklists, quotes, code blocks, images, tables, and dividers. Clicking an active heading/list format or wrapping style again removes it. Link and image insertion selects the destination so you can replace it immediately. Each toolbar action is one undo step.
+
+The editor has line numbers, wrapped prose, a visible current line, and explicit caret/selection colors for both themes. The zoom controls also resize editor text. Highlighting uses an incremental native text editor and initializes when entering Edit mode.
 
 Open documents from a local drive; network shares are not supported. Markdown files can be up to 10 MB. Text is read as UTF-8, with byte order mark detection for UTF-8 and UTF-16 files.
 
@@ -23,7 +27,11 @@ Open documents from a local drive; network shares are not supported. Markdown fi
 | Enter / Shift+Enter | Next / previous match while searching |
 | F3 / Shift+F3 | Next / previous match |
 | Esc | Close search |
-| Ctrl+B | Show or hide the outline |
+| Ctrl+B | Bold selected text while editing; show/hide outline while reading |
+| Ctrl+I / Ctrl+K | Italic / insert link while editing |
+| Ctrl+` | Inline code while editing |
+| Ctrl+Z / Ctrl+Y | Undo / redo while editing |
+| Ctrl+Shift+B | Show or hide the outline in either mode |
 | Ctrl++ / Ctrl+- | Zoom in / out |
 | Ctrl+0 | Reset zoom |
 | Alt+Left / Alt+Right | Previous / next document in navigation history |
@@ -66,4 +74,4 @@ Uninstall removes this app's installation, shortcut, and registrations. Your doc
 
 ## Dependencies
 
-Markdown parsing uses [Markdig](https://github.com/xoofx/markdig) (BSD 2-Clause). Document display uses [Microsoft WebView2](https://learn.microsoft.com/microsoft-edge/webview2/) under its SDK and runtime terms. The desktop shell uses [.NET WPF](https://github.com/dotnet/wpf) (MIT). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for license texts and attribution; the published app also includes the bundled runtime's notices.
+Markdown parsing uses [Markdig](https://github.com/xoofx/markdig) (BSD 2-Clause). Source editing uses [AvalonEdit](https://github.com/icsharpcode/AvalonEdit) (MIT). Document display uses [Microsoft WebView2](https://learn.microsoft.com/microsoft-edge/webview2/) under its SDK and runtime terms. The desktop shell uses [.NET WPF](https://github.com/dotnet/wpf) (MIT). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for license texts and attribution; the published app also includes the bundled runtime's notices.

@@ -2,6 +2,34 @@
 
 Markdown Viewer uses the following components. These notices apply to the respective dependencies and do not change their license terms.
 
+## AvalonEdit 6.3.1.120
+
+[AvalonEdit](https://github.com/icsharpcode/AvalonEdit) is licensed under MIT. The NuGet package declares this license in its metadata. The full text below comes from the [license at the package's source commit](https://github.com/icsharpcode/AvalonEdit/blob/862415d51eddc9eac93f462dbc522ffbf929cd52/LICENSE).
+
+```text
+MIT License
+
+Copyright (c) AvalonEdit Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Markdig 1.3.2
 
 [Markdig](https://github.com/xoofx/markdig) is licensed under BSD-2-Clause. The NuGet package declares this license in its metadata. The full text below comes from the [license at the package's source commit](https://github.com/xoofx/markdig/blob/fc705234fa211d179ee1d5e7656b51ab99f70ca9/license.txt).
