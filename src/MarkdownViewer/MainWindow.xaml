@@ -23,6 +23,8 @@
      <Button Style="{StaticResource IconButton}" Content="&#xE8FD;" ToolTip="Toggle outline (Ctrl+B)" AutomationProperties.Name="Toggle outline" Click="Outline_Click"/>
     </StackPanel>
     <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+     <Button x:Name="ModeButton" Content="Edit" ToolTip="Edit this Markdown document" AutomationProperties.Name="Edit document" Click="Mode_Click" IsEnabled="False"/>
+     <Button x:Name="SaveButton" Style="{StaticResource IconButton}" Content="&#xE74E;" ToolTip="Save now (Ctrl+S)" AutomationProperties.Name="Save document" Click="SaveButton_Click" IsEnabled="False"/>
      <Button Style="{StaticResource IconButton}" Content="&#xE721;" ToolTip="Find in document (Ctrl+F)" AutomationProperties.Name="Find" Click="Find_Click"/>
      <Button x:Name="ThemeButton" Style="{StaticResource IconButton}" Content="&#xE708;" ToolTip="Switch to dark theme" AutomationProperties.Name="Toggle theme" Click="Theme_Click"/>
      <Border Width="1" Height="22" Background="{DynamicResource Line}" Margin="9,0"/>
@@ -61,6 +63,9 @@
    </Border>
    <Grid Grid.Column="1" Background="{DynamicResource Surface}">
     <wv:WebView2 x:Name="Reader" Visibility="Collapsed" DefaultBackgroundColor="White" AllowDrop="False" AllowExternalDrop="True"/>
+    <Border x:Name="EditorPanel" Visibility="Collapsed" Background="{DynamicResource Surface}">
+     <TextBox x:Name="Editor" AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Padding="54,42" FontFamily="Consolas" FontSize="14" Background="Transparent" Foreground="{DynamicResource Ink}" BorderThickness="0" SpellCheck.IsEnabled="False" UndoLimit="1000" AutomationProperties.Name="Markdown source editor" TextChanged="Editor_TextChanged"/>
+    </Border>
     <Grid x:Name="Welcome" Background="{DynamicResource Surface}">
      <StackPanel MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="40,20,40,60">
       <Border Background="{DynamicResource Panel}" CornerRadius="16" Width="76" Height="76" HorizontalAlignment="Left" Margin="0,0,0,28"><TextBlock Text="M↓" FontSize="28" FontWeight="SemiBold" Foreground="{DynamicResource Accent}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>

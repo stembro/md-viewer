@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -24,9 +25,19 @@ public partial class MainWindow : Window
     private readonly string? _initialPath;
     private readonly List<string> _history = [];
     private readonly DispatcherTimer _reloadTimer = new() { Interval = TimeSpan.FromMilliseconds(400) };
+    private readonly DispatcherTimer _autoSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(650) };
     private FileSystemWatcher? _watcher;
     private Task? _initialization;
     private string? _currentPath;
+    private MarkdownTextFile? _sourceFile;
+    private string _currentMarkdown = "";
+    private bool _isEditing;
+    private bool _isLoadingEditor;
+    private bool _isSaving;
+    private bool _isDirty;
+    private bool _externalConflict;
+    private bool _allowClose;
+    private int _editorRevision;
     private string _documentHtml = "";
     private string _navigationUri = "";
     private string? _pendingFragment;
@@ -51,7 +62,12 @@ public partial class MainWindow : Window
         _reloadTimer.Tick += async (_, _) =>
         {
             _reloadTimer.Stop();
-            if (_currentPath is not null) await OpenDocumentAsync(_currentPath, addHistory: false, preserveScroll: true);
+            if (_currentPath is not null && !_isEditing) await OpenDocumentAsync(_currentPath, addHistory: false, preserveScroll: true);
+        };
+        _autoSaveTimer.Tick += async (_, _) =>
+        {
+            _autoSaveTimer.Stop();
+            await SaveEditorAsync();
         };
     }
 
@@ -202,6 +218,11 @@ public partial class MainWindow : Window
             path = Path.GetFullPath(path);
             if (path.StartsWith(@"\\", StringComparison.Ordinal)) throw new IOException("Copy this document to a local drive before opening it. Network shares are not supported.");
             if (!MarkdownExtensions.Contains(Path.GetExtension(path))) throw new IOException("Choose a .md, .markdown, .mdown, or .mkd file.");
+            if (_isEditing && !string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!await SaveEditorAsync()) return;
+                LeaveEditMode();
+            }
             var info = new FileInfo(path);
             if (!info.Exists) throw new FileNotFoundException("The file no longer exists or could not be found.");
             if (info.Length > 10 * 1024 * 1024) throw new IOException("This file is larger than the 10 MB reading limit.");
@@ -210,7 +231,8 @@ public partial class MainWindow : Window
             await EnsureReaderAsync();
             double scroll = 0;
             if (preserveScroll && _currentPath is not null) double.TryParse(await ScriptAsync("window.scrollY"), CultureInfo.InvariantCulture, out scroll);
-            var markdown = await ReadFileAsync(path);
+            var sourceFile = await MarkdownTextFile.ReadAsync(path);
+            var markdown = sourceFile.Text;
             var darkMode = _settings.DarkMode;
             var rendered = await Task.Run(() => MarkdownRenderer.Render(markdown, darkMode));
             if (version != _openVersion || _closed) return;
@@ -218,6 +240,10 @@ public partial class MainWindow : Window
             var directoryUri = new Uri(directory + Path.DirectorySeparatorChar).AbsoluteUri.Replace("file:///", MarkdownRenderer.LocalOrigin, StringComparison.Ordinal);
             _documentHtml = rendered.Html.Replace($"<base href=\"{MarkdownRenderer.LocalOrigin}\">", $"<base href=\"{WebUtility.HtmlEncode(directoryUri)}\">", StringComparison.Ordinal);
             _currentPath = path;
+            _sourceFile = sourceFile;
+            _currentMarkdown = markdown;
+            _isDirty = false;
+            _externalConflict = false;
             _pendingFragment = fragment;
             _pendingScroll = scroll;
             _navigationUri = $"{MarkdownRenderer.LocalOrigin}__viewer_document__.html?v={version}";
@@ -232,6 +258,8 @@ public partial class MainWindow : Window
             Notice.Visibility = Visibility.Collapsed;
             FindResult.Text = "";
             PopulateOutline(rendered.Headings);
+            ModeButton.IsEnabled = true;
+            SaveButton.IsEnabled = false;
             if (addHistory)
             {
                 if (_historyIndex < _history.Count - 1) _history.RemoveRange(_historyIndex + 1, _history.Count - _historyIndex - 1);
@@ -255,20 +283,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private static async Task<string> ReadFileAsync(string path)
-    {
-        for (var attempt = 0; ; attempt++)
-        {
-            try
-            {
-                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, true);
-                using var reader = new StreamReader(stream, Encoding.UTF8, true);
-                return await reader.ReadToEndAsync();
-            }
-            catch (IOException) when (attempt < 3) { await Task.Delay(100); }
-        }
-    }
-
     private void PopulateOutline(IReadOnlyList<Heading> headings)
     {
         OutlineList.Items.Clear();
@@ -282,6 +296,270 @@ public partial class MainWindow : Window
         OutlineEmpty.Text = "This document has no headings.";
         OutlineEmpty.Visibility = headings.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
+
+    private void Mode_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isEditing) _ = ReturnToReadingModeAsync();
+        else EnterEditMode();
+    }
+
+    private void EnterEditMode()
+    {
+        if (_currentPath is null || _sourceFile is null) return;
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(_currentPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ShowNotice("Could not check whether this file can be edited. " + ex.Message);
+            return;
+        }
+        if (attributes.HasFlag(FileAttributes.ReadOnly))
+        {
+            ShowNotice("This file is read-only. Clear its Read-only setting in File Properties to edit it.");
+            return;
+        }
+
+        _isEditing = true;
+        _externalConflict = false;
+        _isLoadingEditor = true;
+        Editor.Text = _currentMarkdown;
+        _isLoadingEditor = false;
+        EditorPanel.Visibility = Visibility.Visible;
+        Reader.Visibility = Visibility.Collapsed;
+        Welcome.Visibility = Visibility.Collapsed;
+        ModeButton.Content = "Read";
+        ModeButton.ToolTip = "Return to the rendered document";
+        AutomationProperties.SetName(ModeButton, "Return to reading mode");
+        SaveButton.IsEnabled = true;
+        DocumentName.Text = Path.GetFileName(_currentPath) + " · Editing";
+        DocumentStats.Text = "Markdown source   ·   Auto-saves after a short pause";
+        StatusText.Text = "Editing · changes save automatically while you type";
+        StatusText.ToolTip = _currentPath;
+        FindResult.Text = "";
+        FindBar.Visibility = Visibility.Collapsed;
+        Editor.Focus();
+        Editor.CaretIndex = 0;
+    }
+
+    private async Task ReturnToReadingModeAsync()
+    {
+        if (_currentPath is null || !await SaveEditorAsync()) return;
+        var path = _currentPath;
+        LeaveEditMode();
+        await OpenDocumentAsync(path, addHistory: false, preserveScroll: true);
+    }
+
+    private void LeaveEditMode()
+    {
+        _autoSaveTimer.Stop();
+        _isEditing = false;
+        _isDirty = false;
+        _externalConflict = false;
+        EditorPanel.Visibility = Visibility.Collapsed;
+        Reader.Visibility = Visibility.Visible;
+        ModeButton.Content = "Edit";
+        ModeButton.ToolTip = "Edit this Markdown document";
+        AutomationProperties.SetName(ModeButton, "Edit document");
+        SaveButton.IsEnabled = false;
+        if (_currentPath is not null)
+        {
+            DocumentName.Text = Path.GetFileName(_currentPath);
+            StatusText.Text = _currentPath;
+            StatusText.ToolTip = _currentPath;
+        }
+    }
+
+    private void Editor_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_isEditing || _isLoadingEditor) return;
+        _editorRevision++;
+        _isDirty = _sourceFile is null || !MarkdownTextFile.ContentEquals(Editor.Text, _currentMarkdown);
+        if (!_isDirty)
+        {
+            _autoSaveTimer.Stop();
+            if (!_externalConflict) StatusText.Text = "All changes saved";
+            return;
+        }
+
+        if (_externalConflict)
+        {
+            StatusText.Text = "The file changed elsewhere · review before saving";
+            return;
+        }
+        StatusText.Text = "Unsaved changes · saving shortly…";
+        _autoSaveTimer.Stop();
+        _autoSaveTimer.Start();
+    }
+
+    private async Task<bool> SaveEditorAsync(bool force = false)
+    {
+        if (!_isEditing || !_isDirty) return true;
+        if (_isSaving || _sourceFile is null || _currentPath is null) return false;
+        if (_externalConflict)
+        {
+            if (!force) return false;
+            var answer = MessageBox.Show(this,
+                "This file changed in another window after your copy was opened. Replace that version with your edits?",
+                "Save over the newer file?", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes) return false;
+        }
+
+        var path = _currentPath;
+        var revision = _editorRevision;
+        var editorText = Editor.Text;
+        var updatedSource = WithEditorLineEndings(editorText, _sourceFile.NewLine);
+        var sourceFile = _sourceFile;
+        var temporaryPath = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        _isSaving = true;
+        _autoSaveTimer.Stop();
+        try
+        {
+            if (!File.Exists(path))
+            {
+                _externalConflict = true;
+                ShowExternalConflict("The file was removed or renamed. Your edits are still here.");
+                return false;
+            }
+            var attributes = File.GetAttributes(path);
+            if (attributes.HasFlag(FileAttributes.ReadOnly)) throw new UnauthorizedAccessException("The file has become read-only.");
+
+            var beforeWrite = await MarkdownTextFile.ReadAsync(path);
+            if (!MarkdownTextFile.ContentEquals(beforeWrite.Text, sourceFile.Text)
+                && !MarkdownTextFile.ContentEquals(beforeWrite.Text, editorText))
+            {
+                _externalConflict = true;
+                if (!force)
+                {
+                    _autoSaveTimer.Stop();
+                    ShowExternalConflict("This file changed in another window. Your edits are still here.");
+                    return false;
+                }
+                if (MessageBox.Show(this,
+                    "This file changed in another window after your copy was opened. Replace that version with your edits?",
+                    "Save over the newer file?", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                {
+                    _autoSaveTimer.Stop();
+                    ShowExternalConflict("This file changed in another window. Your edits are still here.");
+                    return false;
+                }
+                _externalConflict = false;
+            }
+
+            await File.WriteAllBytesAsync(temporaryPath, sourceFile.Encode(editorText));
+            if (!File.Exists(path))
+            {
+                _externalConflict = true;
+                ShowExternalConflict("The file was removed while you were editing. Your edits are still here.");
+                return false;
+            }
+            var immediatelyBeforeReplace = await MarkdownTextFile.ReadAsync(path);
+            if (!MarkdownTextFile.ContentEquals(immediatelyBeforeReplace.Text, sourceFile.Text)
+                && !MarkdownTextFile.ContentEquals(immediatelyBeforeReplace.Text, editorText))
+            {
+                _externalConflict = true;
+                if (!force || MessageBox.Show(this,
+                    "The file changed again while saving. Replace the newest version with your edits?",
+                    "Save over the newer file?", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                {
+                    _autoSaveTimer.Stop();
+                    ShowExternalConflict("The file changed again while saving. Your edits are still here.");
+                    return false;
+                }
+                _externalConflict = false;
+            }
+            File.Replace(temporaryPath, path, null, ignoreMetadataErrors: true);
+
+            _sourceFile = new MarkdownTextFile(updatedSource, sourceFile.Encoding, sourceFile.HasPreamble, sourceFile.NewLine);
+            _currentMarkdown = updatedSource;
+            _externalConflict = false;
+            var updated = await Task.Run(() => MarkdownRenderer.Render(updatedSource, _settings.DarkMode));
+            PopulateOutline(updated.Headings);
+            DocumentStats.Text = $"{updated.WordCount:N0} words   ·   Editing   ·   Auto-saves after a short pause";
+            if (revision == _editorRevision && MarkdownTextFile.ContentEquals(Editor.Text, updatedSource))
+            {
+                _isDirty = false;
+                StatusText.Text = "Saved";
+            }
+            else
+            {
+                _isDirty = true;
+                StatusText.Text = "Unsaved changes · saving shortly…";
+                _autoSaveTimer.Start();
+            }
+            Notice.Visibility = Visibility.Collapsed;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            ShowNotice($"Could not save “{Path.GetFileName(path)}”. {ex.Message} Your edits are still here.");
+            StatusText.Text = "Save failed · press Ctrl+S to try again";
+            return false;
+        }
+        finally
+        {
+            _isSaving = false;
+            try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+            catch (IOException) { }
+        }
+    }
+
+    private static string WithEditorLineEndings(string text, string lineEnding)
+    {
+        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        return lineEnding == "\n" ? normalized : normalized.Replace("\n", lineEnding, StringComparison.Ordinal);
+    }
+
+    private void ShowExternalConflict(string message)
+    {
+        NoticeText.Text = message + " Press Ctrl+S to review and explicitly save over it.";
+        Notice.Visibility = Visibility.Visible;
+        StatusText.Text = "The file changed elsewhere · your edits are kept here";
+    }
+
+    private async Task CheckExternalChangeAsync()
+    {
+        if (!_isEditing || _currentPath is null || _sourceFile is null) return;
+        var path = _currentPath;
+        try
+        {
+            if (!File.Exists(path))
+            {
+                _externalConflict = true;
+                ShowExternalConflict("The file was removed or renamed. Your edits are still here.");
+                _autoSaveTimer.Stop();
+                return;
+            }
+            var latest = await MarkdownTextFile.ReadAsync(path);
+            if (!_isEditing || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase)) return;
+            if (MarkdownTextFile.ContentEquals(latest.Text, _sourceFile.Text)) return;
+
+            if (!_isDirty || MarkdownTextFile.ContentEquals(latest.Text, Editor.Text))
+            {
+                _sourceFile = latest;
+                _currentMarkdown = latest.Text;
+                _isLoadingEditor = true;
+                Editor.Text = latest.Text;
+                _isLoadingEditor = false;
+                _isDirty = false;
+                _externalConflict = false;
+                var rendered = await Task.Run(() => MarkdownRenderer.Render(latest.Text, _settings.DarkMode));
+                PopulateOutline(rendered.Headings);
+                DocumentStats.Text = $"{rendered.WordCount:N0} words   ·   Editing   ·   Auto-saves after a short pause";
+                StatusText.Text = "Updated from disk";
+                return;
+            }
+
+            _externalConflict = true;
+            _autoSaveTimer.Stop();
+            ShowExternalConflict("This file changed in another window. Your edits are still here.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            ShowNotice("Could not check for changes on disk. Your edits are still here. " + ex.Message);
+        }
+    }
+
+    private async void SaveButton_Click(object sender, RoutedEventArgs e) => await SaveEditorAsync(force: true);
 
     private void WatchFile(string path)
     {
@@ -304,7 +582,8 @@ public partial class MainWindow : Window
     {
         if (_closed || !string.Equals(e.FullPath, _currentPath, StringComparison.OrdinalIgnoreCase)) return;
         _reloadTimer.Stop();
-        _reloadTimer.Start();
+        if (_isEditing) _ = CheckExternalChangeAsync();
+        else _reloadTimer.Start();
     });
 
     private async Task<string> ScriptAsync(string script)
@@ -347,8 +626,8 @@ public partial class MainWindow : Window
             item.Click += (_, _) => action();
             menu.Items.Add(item);
         }
-        Item("Reload\tF5", () => { if (_currentPath is not null) _ = OpenDocumentAsync(_currentPath, false, preserveScroll: true); }, _currentPath is not null);
-        Item("Print…\tCtrl+P", Print, _currentPath is not null);
+        Item("Reload\tF5", () => { if (_currentPath is not null && !_isEditing) _ = OpenDocumentAsync(_currentPath, false, preserveScroll: true); }, _currentPath is not null && !_isEditing);
+        Item("Print…\tCtrl+P", Print, _currentPath is not null && !_isEditing);
         Item("Show in folder", () =>
         {
             try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_currentPath}\"") { UseShellExecute = true }); }
@@ -393,7 +672,7 @@ public partial class MainWindow : Window
     private void Find_Click(object sender, RoutedEventArgs e) => ShowFind();
     private void ShowFind() { FindBar.Visibility = Visibility.Visible; FindBox.Focus(); FindBox.SelectAll(); }
     private void FindClose_Click(object sender, RoutedEventArgs e) => CloseFind();
-    private void CloseFind() { FindBar.Visibility = Visibility.Collapsed; Reader.Focus(); }
+    private void CloseFind() { FindBar.Visibility = Visibility.Collapsed; if (_isEditing) Editor.Focus(); else Reader.Focus(); }
     private async void FindNext_Click(object sender, RoutedEventArgs e) => await FindAsync(false);
     private async void FindPrevious_Click(object sender, RoutedEventArgs e) => await FindAsync(true);
     private void FindBox_TextChanged(object sender, TextChangedEventArgs e) { if (FindResult is not null) FindResult.Text = ""; }
@@ -404,6 +683,28 @@ public partial class MainWindow : Window
     private async Task FindAsync(bool backwards)
     {
         if (string.IsNullOrEmpty(FindBox.Text) || _currentPath is null) return;
+        if (_isEditing)
+        {
+            var text = Editor.Text;
+            var needle = FindBox.Text;
+            var start = backwards ? Math.Max(0, Editor.SelectionStart - 1) : Editor.SelectionStart + Editor.SelectionLength;
+            var match = backwards
+                ? (start > 0 ? text.LastIndexOf(needle, start - 1, StringComparison.OrdinalIgnoreCase) : -1)
+                : text.IndexOf(needle, Math.Min(start, text.Length), StringComparison.OrdinalIgnoreCase);
+            if (match < 0)
+                match = backwards
+                    ? text.LastIndexOf(needle, StringComparison.OrdinalIgnoreCase)
+                    : text.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
+            if (match >= 0)
+            {
+                Editor.Focus();
+                Editor.Select(match, needle.Length);
+                Editor.ScrollToLine(Editor.GetLineIndexFromCharacterIndex(match));
+                FindResult.Text = "Match found";
+            }
+            else FindResult.Text = "No matches";
+            return;
+        }
         var result = await ScriptAsync($"window.find({JsonSerializer.Serialize(FindBox.Text)},false,{(backwards ? "true" : "false")},true,false,false,false)");
         FindResult.Text = result == "true" ? "Match found" : "No matches";
     }
@@ -450,7 +751,7 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
     private static bool IsAppShortcut(Key key, ModifierKeys modifiers) =>
-        (modifiers.HasFlag(ModifierKeys.Control) && key is Key.O or Key.F or Key.B or Key.P or Key.Add or Key.OemPlus or Key.Subtract or Key.OemMinus or Key.D0 or Key.NumPad0)
+        (modifiers.HasFlag(ModifierKeys.Control) && key is Key.O or Key.F or Key.B or Key.P or Key.S or Key.Add or Key.OemPlus or Key.Subtract or Key.OemMinus or Key.D0 or Key.NumPad0)
         || (modifiers.HasFlag(ModifierKeys.Alt) && key is Key.Left or Key.Right)
         || key is Key.F5 or Key.F3 or Key.Escape;
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -472,6 +773,7 @@ public partial class MainWindow : Window
                 case Key.F: ShowFind(); break;
                 case Key.B: Outline_Click(this, new RoutedEventArgs()); break;
                 case Key.P: Print(); break;
+                case Key.S: if (_isEditing) await SaveEditorAsync(force: true); break;
                 case Key.Add: case Key.OemPlus: SetZoom(_settings.Zoom + .1); break;
                 case Key.Subtract: case Key.OemMinus: SetZoom(_settings.Zoom - .1); break;
                 case Key.D0: case Key.NumPad0: SetZoom(1); break;
@@ -482,15 +784,28 @@ public partial class MainWindow : Window
             if (key == Key.Left) await NavigateHistoryAsync(-1);
             if (key == Key.Right) await NavigateHistoryAsync(1);
         }
-        else if (key == Key.F5 && _currentPath is not null) await OpenDocumentAsync(_currentPath, false, preserveScroll: true);
+        else if (key == Key.F5 && _currentPath is not null && !_isEditing) await OpenDocumentAsync(_currentPath, false, preserveScroll: true);
         else if (key == Key.F3) { ShowFind(); await FindAsync(modifiers.HasFlag(ModifierKeys.Shift)); }
         else if (key == Key.Escape) CloseFind();
     }
-    private void Window_Closing(object? sender, CancelEventArgs e)
+    private async void Window_Closing(object? sender, CancelEventArgs e)
     {
+        if (_isEditing && _isDirty && !_allowClose)
+        {
+            var answer = MessageBox.Show(this,
+                "Save your Markdown changes before closing?",
+                "Unsaved Markdown changes", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+            if (answer == MessageBoxResult.Cancel) { e.Cancel = true; return; }
+            e.Cancel = true;
+            if (answer == MessageBoxResult.Yes && !await SaveEditorAsync(force: true)) return;
+            _allowClose = true;
+            Close();
+            return;
+        }
         _closed = true;
         _openVersion++;
         _reloadTimer.Stop();
+        _autoSaveTimer.Stop();
         _watcher?.Dispose();
         _settings.Save();
         Reader.Dispose();

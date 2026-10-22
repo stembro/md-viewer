@@ -3,12 +3,13 @@
 A small, native Windows Markdown reader with a quiet, document-first interface. Open a file, read it, and keep your place while the document updates.
 
 - Rendered Markdown with headings, lists, links, tables, quotes, and code blocks.
+- A source-edit mode with automatic saving after a short pause and a Ctrl+S save command.
 - Document outline, text search, zoom, and light/dark themes.
-- Recent files, drag and drop, and automatic reload when the file changes.
+- Recent files, drag and drop, and automatic reload when the file changes, including when a second viewer window has the same document open.
 - Relative local images and links to other Markdown documents.
 - Native WPF desktop window with an embedded WebView2 document surface.
 
-Raw HTML and scripts are disabled, and remote images are not fetched. This is a viewer; edit your documents in your preferred editor.
+Raw HTML and scripts are disabled, and remote images are not fetched. Edit mode changes the Markdown source directly and saves after a short pause. Use Ctrl+S to save immediately. If another window changes the file while you have unsaved edits, Markdown Viewer keeps your text and asks before replacing the newer file.
 
 Open documents from a local drive; network shares are not supported. Markdown files can be up to 10 MB. Text is read as UTF-8, with byte order mark detection for UTF-8 and UTF-16 files.
 
@@ -18,6 +19,7 @@ Open documents from a local drive; network shares are not supported. Markdown fi
 | --- | --- |
 | Ctrl+O | Open a Markdown file |
 | Ctrl+F | Find in the document |
+| Ctrl+S | Save edits immediately |
 | Enter / Shift+Enter | Next / previous match while searching |
 | F3 / Shift+F3 | Next / previous match |
 | Esc | Close search |
