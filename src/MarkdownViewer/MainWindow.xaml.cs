@@ -24,7 +24,7 @@ public partial class MainWindow : Window
     private readonly UserSettings _settings = UserSettings.Load();
     private readonly string? _initialPath;
     private readonly List<string> _history = [];
-    private readonly DispatcherTimer _reloadTimer = new() { Interval = TimeSpan.FromMilliseconds(400) };
+    private readonly DispatcherTimer _reloadTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly DispatcherTimer _autoSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(650) };
     private FileSystemWatcher? _watcher;
     private Task? _initialization;
@@ -38,7 +38,13 @@ public partial class MainWindow : Window
     private bool _externalConflict;
     private bool _allowClose;
     private int _editorRevision;
-    private string _documentHtml = "";
+    private byte[] _documentBytes = [];
+    private RenderedDocument? _renderedDocument;
+    private string? _renderedMarkdown;
+    private IReadOnlyList<Heading>? _outlineHeadings;
+    private bool _readerHasDocument;
+    private bool _pendingPageDarkMode;
+    private static Task<CoreWebView2Environment>? _environment;
     private string _navigationUri = "";
     private string? _pendingFragment;
     private double _pendingScroll;
@@ -62,7 +68,8 @@ public partial class MainWindow : Window
         _reloadTimer.Tick += async (_, _) =>
         {
             _reloadTimer.Stop();
-            if (_currentPath is not null && !_isEditing) await OpenDocumentAsync(_currentPath, addHistory: false, preserveScroll: true);
+            if (_isEditing) await CheckExternalChangeAsync();
+            else if (_currentPath is not null) await OpenDocumentAsync(_currentPath, addHistory: false, preserveScroll: true, skipUnchanged: true);
         };
         _autoSaveTimer.Tick += async (_, _) =>
         {
@@ -74,9 +81,11 @@ public partial class MainWindow : Window
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         ApplyTitleBarTheme();
+        StartupMetrics.Mark("windowLoadedMs");
         try
         {
             if (_initialPath is not null) await OpenDocumentAsync(_initialPath);
+            else await EnsureReaderAsync();
         }
         catch (Exception ex) { ShowNotice("The reading engine could not start. Install or repair Microsoft Edge WebView2 Runtime. " + ex.Message); }
     }
@@ -85,8 +94,10 @@ public partial class MainWindow : Window
 
     private async Task InitializeReaderAsync()
     {
-        var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(UserSettings.DataDirectory, "WebView2"));
+        var environment = await (_environment ??= CoreWebView2Environment.CreateAsync(null, Path.Combine(UserSettings.DataDirectory, "WebView2")));
+        if (_closed) return;
         await Reader.EnsureCoreWebView2Async(environment);
+        if (_closed) return;
         var core = Reader.CoreWebView2;
         core.Settings.IsScriptEnabled = false;
         core.Settings.AreHostObjectsAllowed = false;
@@ -113,6 +124,7 @@ public partial class MainWindow : Window
             ZoomButton.Content = $"{_settings.Zoom:P0}";
         };
         Reader.ZoomFactor = _settings.Zoom;
+        StartupMetrics.Mark("browserReadyMs");
     }
 
     private async void ResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e)
@@ -121,11 +133,11 @@ public partial class MainWindow : Window
         try
         {
             var uri = new Uri(e.Request.Uri);
-            if (uri.Scheme == "https" && uri.Host == "markdown.local")
+            if (uri.Scheme == "https" && uri.Host == MarkdownRenderer.LocalHost)
             {
                 if (uri.AbsolutePath == "/__viewer_document__.html")
                 {
-                    e.Response = Response(Encoding.UTF8.GetBytes(_documentHtml), "text/html; charset=utf-8");
+                    e.Response = Response(_documentBytes, "text/html; charset=utf-8");
                     return;
                 }
                 if (e.ResourceContext == CoreWebView2WebResourceContext.Image && TryLocalPath(uri, out var path)
@@ -153,7 +165,7 @@ public partial class MainWindow : Window
     private static bool TryLocalPath(Uri uri, out string path)
     {
         path = "";
-        if (uri.Scheme != "https" || uri.Host != "markdown.local") return false;
+        if (uri.Scheme != "https" || uri.Host != MarkdownRenderer.LocalHost) return false;
         try
         {
             var decoded = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')).Replace('/', '\\');
@@ -175,10 +187,18 @@ public partial class MainWindow : Window
     private async void NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
         if (!e.IsSuccess || _closed) return;
+        _readerHasDocument = true;
+        if (_pendingPageDarkMode != _settings.DarkMode)
+            await ScriptAsync($"document.documentElement.dataset.theme='{(_settings.DarkMode ? "dark" : "light")}'");
         if (!string.IsNullOrEmpty(_pendingFragment)) await ScrollToAsync(_pendingFragment);
         else if (_pendingScroll > 0) await ScriptAsync($"window.scrollTo(0,{_pendingScroll.ToString(CultureInfo.InvariantCulture)})");
         _pendingFragment = null;
         _pendingScroll = 0;
+        if (StartupMetrics.ReportPath is not null)
+        {
+            StartupMetrics.Complete();
+            Close();
+        }
     }
 
     private async Task FollowLinkAsync(string address)
@@ -190,7 +210,7 @@ public partial class MainWindow : Window
         {
             await OpenDocumentAsync(uri.LocalPath);
         }
-        else if (uri.Host == "markdown.local")
+        else if (uri.Host == MarkdownRenderer.LocalHost)
         {
             var fragment = Uri.UnescapeDataString(uri.Fragment.TrimStart('#'));
             if (TryLocalPath(uri, out var path))
@@ -210,7 +230,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task OpenDocumentAsync(string path, bool addHistory = true, string? fragment = null, bool preserveScroll = false)
+    private async Task OpenDocumentAsync(string path, bool addHistory = true, string? fragment = null, bool preserveScroll = false, bool skipUnchanged = false, bool reusePage = false)
     {
         var version = ++_openVersion;
         try
@@ -226,28 +246,86 @@ public partial class MainWindow : Window
             var info = new FileInfo(path);
             if (!info.Exists) throw new FileNotFoundException("The file no longer exists or could not be found.");
             if (info.Length > 10 * 1024 * 1024) throw new IOException("This file is larger than the 10 MB reading limit.");
+            ModeButton.IsEnabled = false;
             Welcome.Visibility = Visibility.Collapsed;
             Reader.Visibility = Visibility.Visible;
-            await EnsureReaderAsync();
-            double scroll = 0;
-            if (preserveScroll && _currentPath is not null) double.TryParse(await ScriptAsync("window.scrollY"), CultureInfo.InvariantCulture, out scroll);
-            var sourceFile = await MarkdownTextFile.ReadAsync(path);
-            var markdown = sourceFile.Text;
+            var samePath = string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase);
+            var priorMarkdown = _currentMarkdown;
+            var cachedMarkdown = _renderedMarkdown;
+            var cachedDocument = _renderedDocument;
             var darkMode = _settings.DarkMode;
-            var rendered = await Task.Run(() => MarkdownRenderer.Render(markdown, darkMode));
+            var canUpdatePage = samePath && _readerHasDocument;
+            // File decoding, parsing, HTML encoding and browser startup run concurrently.
+            var prepare = Task.Run(async () =>
+            {
+                var source = await MarkdownTextFile.ReadAsync(path);
+                StartupMetrics.Mark("fileReadMs");
+                if (skipUnchanged && samePath && source.Text == priorMarkdown)
+                    return new PreparedDocument(source, null, [], null);
+                var rendered = cachedDocument is not null && source.Text == cachedMarkdown
+                    ? cachedDocument : MarkdownRenderer.Render(source.Text, darkMode);
+                StartupMetrics.Mark("markdownRenderedMs");
+                var directory = Path.GetDirectoryName(path)!;
+                var directoryUri = new Uri(directory + Path.DirectorySeparatorChar).AbsoluteUri.Replace("file:///", MarkdownRenderer.LocalOrigin, StringComparison.Ordinal);
+                var html = rendered.Html
+                    .Replace($"<base href=\"{MarkdownRenderer.LocalOrigin}\">", $"<base href=\"{WebUtility.HtmlEncode(directoryUri)}\">", StringComparison.Ordinal)
+                    .Replace(darkMode ? "data-theme=\"light\"" : "data-theme=\"dark\"", darkMode ? "data-theme=\"dark\"" : "data-theme=\"light\"", StringComparison.Ordinal);
+                string? updateScript = null;
+                if (canUpdatePage && rendered.BodyHtml.Length <= 512 * 1024)
+                {
+                    // Only the host executes this script. Markdown HTML and scripts remain disabled.
+                    updateScript = $$"""
+                        (() => {
+                          const main = document.getElementById('document');
+                          if (!main) return false;
+                          const y = {{(preserveScroll ? "window.scrollY" : "0")}};
+                          main.innerHTML = {{JsonSerializer.Serialize(rendered.BodyHtml)}};
+                          document.documentElement.dataset.theme = '{{(darkMode ? "dark" : "light")}}';
+                          const id = {{JsonSerializer.Serialize(fragment)}};
+                          if (id) document.getElementById(id)?.scrollIntoView({block:'start'});
+                          else window.scrollTo(0, y);
+                          return true;
+                        })()
+                        """;
+                }
+                return new PreparedDocument(source, rendered, Encoding.UTF8.GetBytes(html), updateScript,
+                    reusePage && canUpdatePage && ReferenceEquals(cachedDocument, rendered));
+            });
+            var initialize = EnsureReaderAsync();
+            await Task.WhenAll(prepare, initialize);
             if (version != _openVersion || _closed) return;
-            var directory = Path.GetDirectoryName(path)!;
-            var directoryUri = new Uri(directory + Path.DirectorySeparatorChar).AbsoluteUri.Replace("file:///", MarkdownRenderer.LocalOrigin, StringComparison.Ordinal);
-            _documentHtml = rendered.Html.Replace($"<base href=\"{MarkdownRenderer.LocalOrigin}\">", $"<base href=\"{WebUtility.HtmlEncode(directoryUri)}\">", StringComparison.Ordinal);
+            var prepared = await prepare;
+            var sourceFile = prepared.Source;
+            var rendered = prepared.Rendered;
+            if (rendered is null)
+            {
+                _sourceFile = sourceFile;
+                return;
+            }
+            _documentBytes = prepared.Bytes;
             _currentPath = path;
             _sourceFile = sourceFile;
-            _currentMarkdown = markdown;
+            _currentMarkdown = sourceFile.Text;
+            _renderedMarkdown = sourceFile.Text;
+            _renderedDocument = rendered;
             _isDirty = false;
             _externalConflict = false;
-            _pendingFragment = fragment;
-            _pendingScroll = scroll;
-            _navigationUri = $"{MarkdownRenderer.LocalOrigin}__viewer_document__.html?v={version}";
-            Reader.CoreWebView2.Navigate(_navigationUri);
+            var updatedPage = prepared.ReusePage || (prepared.UpdateScript is not null && await ScriptAsync(prepared.UpdateScript) == "true");
+            if (version != _openVersion || _closed) return;
+            if (!updatedPage)
+            {
+                double scroll = 0;
+                if (preserveScroll && samePath) double.TryParse(await ScriptAsync("window.scrollY"), CultureInfo.InvariantCulture, out scroll);
+                if (version != _openVersion || _closed) return;
+                _pendingFragment = fragment;
+                _pendingScroll = scroll;
+                _readerHasDocument = false;
+                _pendingPageDarkMode = darkMode;
+                _navigationUri = $"{MarkdownRenderer.LocalOrigin}__viewer_document__.html?v={version}";
+                Reader.CoreWebView2.Navigate(_navigationUri);
+            }
+            else if (darkMode != _settings.DarkMode)
+                await ScriptAsync($"document.documentElement.dataset.theme='{(_settings.DarkMode ? "dark" : "light")}'");
             Reader.Visibility = Visibility.Visible;
             Welcome.Visibility = Visibility.Collapsed;
             DocumentName.Text = Path.GetFileName(path);
@@ -267,10 +345,13 @@ public partial class MainWindow : Window
                 _historyIndex = _history.Count - 1;
             }
             UpdateHistoryButtons();
-            _settings.RecentFiles.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
-            _settings.RecentFiles.Insert(0, path);
-            _settings.RecentFiles = _settings.RecentFiles.Take(12).ToList();
-            _settings.Save();
+            if (addHistory || !samePath)
+            {
+                _settings.RecentFiles.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+                _settings.RecentFiles.Insert(0, path);
+                _settings.RecentFiles = _settings.RecentFiles.Take(12).ToList();
+                _settings.Save();
+            }
             WatchFile(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or InvalidOperationException or COMException or WebView2RuntimeNotFoundException)
@@ -281,18 +362,21 @@ public partial class MainWindow : Window
                 ShowNotice($"Could not open “{Path.GetFileName(path)}”. {ex.Message}");
             }
         }
+        finally
+        {
+            if (version == _openVersion && !_closed) ModeButton.IsEnabled = _currentPath is not null;
+        }
     }
+
+    private sealed record PreparedDocument(MarkdownTextFile Source, RenderedDocument? Rendered, byte[] Bytes, string? UpdateScript, bool ReusePage = false);
+    private sealed record OutlineItem(string Id, string Text, Thickness Indent);
 
     private void PopulateOutline(IReadOnlyList<Heading> headings)
     {
-        OutlineList.Items.Clear();
+        if (ReferenceEquals(headings, _outlineHeadings)) return;
+        _outlineHeadings = headings;
         var minimum = headings.Count == 0 ? 1 : headings.Min(h => h.Level);
-        foreach (var heading in headings)
-            OutlineList.Items.Add(new ListBoxItem
-            {
-                Content = new TextBlock { Text = heading.Text, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness((heading.Level - minimum) * 12, 0, 0, 0) },
-                Tag = heading.Id, ToolTip = heading.Text
-            });
+        OutlineList.ItemsSource = headings.Select(h => new OutlineItem(h.Id, h.Text, new Thickness((h.Level - minimum) * 12, 0, 0, 0))).ToArray();
         OutlineEmpty.Text = "This document has no headings.";
         OutlineEmpty.Visibility = headings.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -331,6 +415,7 @@ public partial class MainWindow : Window
         ModeButton.ToolTip = "Return to the rendered document";
         AutomationProperties.SetName(ModeButton, "Return to reading mode");
         SaveButton.IsEnabled = true;
+        OutlineList.IsEnabled = false;
         DocumentName.Text = Path.GetFileName(_currentPath) + " · Editing";
         DocumentStats.Text = "Markdown source   ·   Auto-saves after a short pause";
         StatusText.Text = "Editing · changes save automatically while you type";
@@ -346,7 +431,7 @@ public partial class MainWindow : Window
         if (_currentPath is null || !await SaveEditorAsync()) return;
         var path = _currentPath;
         LeaveEditMode();
-        await OpenDocumentAsync(path, addHistory: false, preserveScroll: true);
+        await OpenDocumentAsync(path, addHistory: false, preserveScroll: true, reusePage: true);
     }
 
     private void LeaveEditMode()
@@ -361,6 +446,7 @@ public partial class MainWindow : Window
         ModeButton.ToolTip = "Edit this Markdown document";
         AutomationProperties.SetName(ModeButton, "Edit document");
         SaveButton.IsEnabled = false;
+        OutlineList.IsEnabled = true;
         if (_currentPath is not null)
         {
             DocumentName.Text = Path.GetFileName(_currentPath);
@@ -373,14 +459,9 @@ public partial class MainWindow : Window
     {
         if (!_isEditing || _isLoadingEditor) return;
         _editorRevision++;
-        _isDirty = _sourceFile is null || !MarkdownTextFile.ContentEquals(Editor.Text, _currentMarkdown);
-        if (!_isDirty)
-        {
-            _autoSaveTimer.Stop();
-            if (!_externalConflict) StatusText.Text = "All changes saved";
-            return;
-        }
-
+        // TextBox.Text materializes the entire buffer. Inspect it once at save time,
+        // rather than copying and normalizing a large document on every keystroke.
+        _isDirty = true;
         if (_externalConflict)
         {
             StatusText.Text = "The file changed elsewhere · review before saving";
@@ -407,13 +488,19 @@ public partial class MainWindow : Window
         var path = _currentPath;
         var revision = _editorRevision;
         var editorText = Editor.Text;
-        var updatedSource = WithEditorLineEndings(editorText, _sourceFile.NewLine);
         var sourceFile = _sourceFile;
         var temporaryPath = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         _isSaving = true;
         _autoSaveTimer.Stop();
         try
         {
+            if (await Task.Run(() => MarkdownTextFile.ContentEquals(editorText, sourceFile.Text)))
+            {
+                _isDirty = revision != _editorRevision;
+                if (_isDirty) _autoSaveTimer.Start();
+                else StatusText.Text = "All changes saved";
+                return !_isDirty;
+            }
             if (!File.Exists(path))
             {
                 _externalConflict = true;
@@ -445,7 +532,12 @@ public partial class MainWindow : Window
                 _externalConflict = false;
             }
 
-            await File.WriteAllBytesAsync(temporaryPath, sourceFile.Encode(editorText));
+            var updatedSource = await Task.Run(async () =>
+            {
+                var bytes = sourceFile.Encode(editorText);
+                await File.WriteAllBytesAsync(temporaryPath, bytes);
+                return WithEditorLineEndings(editorText, sourceFile.NewLine);
+            });
             if (!File.Exists(path))
             {
                 _externalConflict = true;
@@ -472,10 +564,8 @@ public partial class MainWindow : Window
             _sourceFile = new MarkdownTextFile(updatedSource, sourceFile.Encoding, sourceFile.HasPreamble, sourceFile.NewLine);
             _currentMarkdown = updatedSource;
             _externalConflict = false;
-            var updated = await Task.Run(() => MarkdownRenderer.Render(updatedSource, _settings.DarkMode));
-            PopulateOutline(updated.Headings);
-            DocumentStats.Text = $"{updated.WordCount:N0} words   ·   Editing   ·   Auto-saves after a short pause";
-            if (revision == _editorRevision && MarkdownTextFile.ContentEquals(Editor.Text, updatedSource))
+            // The reader is hidden. Defer Markdown/HTML work until Read is selected.
+            if (revision == _editorRevision)
             {
                 _isDirty = false;
                 StatusText.Text = "Saved";
@@ -487,7 +577,7 @@ public partial class MainWindow : Window
                 _autoSaveTimer.Start();
             }
             Notice.Visibility = Visibility.Collapsed;
-            return true;
+            return !_isDirty;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
@@ -542,9 +632,6 @@ public partial class MainWindow : Window
                 _isLoadingEditor = false;
                 _isDirty = false;
                 _externalConflict = false;
-                var rendered = await Task.Run(() => MarkdownRenderer.Render(latest.Text, _settings.DarkMode));
-                PopulateOutline(rendered.Headings);
-                DocumentStats.Text = $"{rendered.WordCount:N0} words   ·   Editing   ·   Auto-saves after a short pause";
                 StatusText.Text = "Updated from disk";
                 return;
             }
@@ -563,7 +650,9 @@ public partial class MainWindow : Window
 
     private void WatchFile(string path)
     {
+        if (_watcher is not null && string.Equals(Path.Combine(_watcher.Path, _watcher.Filter), path, StringComparison.OrdinalIgnoreCase)) return;
         _watcher?.Dispose();
+        _watcher = null;
         try
         {
             _watcher = new FileSystemWatcher(Path.GetDirectoryName(path)!, Path.GetFileName(path))
@@ -582,8 +671,7 @@ public partial class MainWindow : Window
     {
         if (_closed || !string.Equals(e.FullPath, _currentPath, StringComparison.OrdinalIgnoreCase)) return;
         _reloadTimer.Stop();
-        if (_isEditing) _ = CheckExternalChangeAsync();
-        else _reloadTimer.Start();
+        _reloadTimer.Start();
     });
 
     private async Task<string> ScriptAsync(string script)
@@ -666,7 +754,7 @@ public partial class MainWindow : Window
         UpdateHistoryButtons();
     }
     private void UpdateHistoryButtons() { BackButton.IsEnabled = _historyIndex > 0; ForwardButton.IsEnabled = _historyIndex >= 0 && _historyIndex < _history.Count - 1; }
-    private async void Outline_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (OutlineList.SelectedItem is ListBoxItem { Tag: string id }) await ScrollToAsync(id); }
+    private async void Outline_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (OutlineList.SelectedItem is OutlineItem item && !_isEditing) await ScrollToAsync(item.Id); }
     private void Outline_Click(object sender, RoutedEventArgs e) { _settings.ShowOutline = !_settings.ShowOutline; ApplyOutline(); }
     private void ApplyOutline() { SidebarColumn.Width = new GridLength(_settings.ShowOutline ? 236 : 0); Sidebar.Visibility = _settings.ShowOutline ? Visibility.Visible : Visibility.Collapsed; }
     private void Find_Click(object sender, RoutedEventArgs e) => ShowFind();

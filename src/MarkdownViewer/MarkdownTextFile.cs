@@ -16,7 +16,7 @@ internal sealed record MarkdownTextFile(string Text, Encoding Encoding, bool Has
 
     public static async Task<MarkdownTextFile> ReadAsync(string path)
     {
-        var bytes = await File.ReadAllBytesAsync(path);
+        var bytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
         if (bytes.Length > 10 * 1024 * 1024)
             throw new IOException("This file is larger than the 10 MB reading limit.");
 
@@ -51,9 +51,28 @@ internal sealed record MarkdownTextFile(string Text, Encoding Encoding, bool Has
         return result;
     }
 
-    public static bool ContentEquals(string left, string right) =>
-        Normalize(left).Equals(Normalize(right), StringComparison.Ordinal);
-
-    private static string Normalize(string text) =>
-        text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+    public static bool ContentEquals(string left, string right)
+    {
+        if (left.Equals(right, StringComparison.Ordinal)) return true;
+        // Compare CRLF, CR and LF without allocating copies of both documents.
+        var l = 0;
+        var r = 0;
+        while (l < left.Length && r < right.Length)
+        {
+            var a = left[l++];
+            var b = right[r++];
+            if (a == '\r')
+            {
+                a = '\n';
+                if (l < left.Length && left[l] == '\n') l++;
+            }
+            if (b == '\r')
+            {
+                b = '\n';
+                if (r < right.Length && right[r] == '\n') r++;
+            }
+            if (a != b) return false;
+        }
+        return l == left.Length && r == right.Length;
+    }
 }

@@ -1,4 +1,30 @@
 using MarkdownViewer.Rendering;
+using MarkdownViewer;
+using System.Diagnostics;
+using System.Text.Json;
+
+if (args.Contains("--benchmark"))
+{
+    var samples = new List<object>();
+    Measure("first-render", "# Welcome\n\nA **small** document with [a link](https://example.com).", 1);
+    const string paragraph = "A local document keeps every paragraph, including **formatted text** and `inline code`.\n\n";
+    Measure("50KB", "# Start\n\n" + string.Concat(Enumerable.Repeat(paragraph, 600)), 15);
+    Measure("2MB", "# Start\n\n" + string.Concat(Enumerable.Repeat(paragraph, 24_000)), 5);
+    Measure("10000-headings", string.Concat(Enumerable.Range(0, 10_000).Select(i => $"## Heading {i}\n\nSome words to read.\n\n")), 5);
+    Console.WriteLine(JsonSerializer.Serialize(samples, new JsonSerializerOptions { WriteIndented = true }));
+    return 0;
+
+    void Measure(string name, string markdown, int iterations)
+    {
+        if (iterations > 1) MarkdownRenderer.Render(markdown);
+        GC.Collect();
+        var allocated = GC.GetAllocatedBytesForCurrentThread();
+        var timer = Stopwatch.StartNew();
+        for (var i = 0; i < iterations; i++) MarkdownRenderer.Render(markdown);
+        samples.Add(new { name, milliseconds = timer.Elapsed.TotalMilliseconds / iterations,
+            allocatedBytes = (GC.GetAllocatedBytesForCurrentThread() - allocated) / iterations });
+    }
+}
 
 var tests = new (string Name, Action Run)[]
 {
@@ -11,7 +37,9 @@ var tests = new (string Name, Action Run)[]
     ("Unicode text and word counts survive rendering", UnicodeText),
     ("Theme and printing styles are present", ThemeAndPrint),
     ("Empty documents are valid", EmptyDocument),
-    ("Documents larger than 2 MiB retain their complete content", LargeDocument)
+    ("Documents larger than 2 MiB retain their complete content", LargeDocument),
+    ("Fast text comparison preserves newline semantics", TextComparison),
+    ("Page updates contain the same safe HTML as navigation", PageUpdates)
 };
 
 var failures = 0;
@@ -106,7 +134,7 @@ static void UnsafeLinks()
 static void LocalResources()
 {
     var result = MarkdownRenderer.Render("[Chapter](notes/chapter.md#details) [Jump](#details) ![Diagram](images/diagram.png) [Web](https://example.com/docs)\n\n## Details");
-    Contains(result.Html, "<base href=\"https://markdown.local/\">");
+    Contains(result.Html, $"<base href=\"{MarkdownRenderer.LocalOrigin}\">");
     var body = Body(result);
     Contains(body, "href=\"notes/chapter.md#details\"");
     Contains(body, "href=\"#details\"");
@@ -121,8 +149,8 @@ static void ContentSecurityPolicy()
     Contains(result.Html, "http-equiv=\"Content-Security-Policy\"");
     Contains(result.Html, "default-src 'none'");
     Contains(result.Html, "script-src 'none'");
-    Contains(result.Html, "img-src https://markdown.local data:;");
-    Contains(result.Html, "base-uri https://markdown.local;");
+    Contains(result.Html, $"img-src https://{MarkdownRenderer.LocalHost} data:;");
+    Contains(result.Html, $"base-uri https://{MarkdownRenderer.LocalHost};");
     Contains(result.Html, "form-action 'none'");
     Contains(result.Html, "name=\"referrer\" content=\"no-referrer\"");
     Excludes(result.Html, "<script");
@@ -174,6 +202,28 @@ static string Body(RenderedDocument document)
     var start = document.Html.IndexOf(open, StringComparison.Ordinal) + open.Length;
     var end = document.Html.IndexOf("</main>", start, StringComparison.Ordinal);
     return document.Html[start..end];
+}
+
+static void TextComparison()
+{
+    foreach (var a in new[] { "a\nb\n", "a\r\nb\r\n", "a\rb\r", "a\r\nb\n" })
+        foreach (var b in new[] { "a\nb\n", "a\r\nb\r\n", "a\rb\r", "a\r\nb\n" })
+            Equal(true, MarkdownTextFile.ContentEquals(a, b));
+    Equal(true, MarkdownTextFile.ContentEquals("", ""));
+    Equal(false, MarkdownTextFile.ContentEquals("a\r\nb", "a\nb\n"));
+    Equal(false, MarkdownTextFile.ContentEquals("a\nb", "a\nB"));
+    Equal(false, MarkdownTextFile.ContentEquals("a\n\nb", "a\nb"));
+    Equal(false, MarkdownTextFile.ContentEquals("a", ""));
+}
+
+static void PageUpdates()
+{
+    var document = MarkdownRenderer.Render("# A heading\n\n<script>alert(1)</script>\n\n[Unsafe](javascript:alert%281%29) **Safe**");
+    Equal(Body(document), document.BodyHtml);
+    Excludes(document.BodyHtml, "<script");
+    Excludes(document.BodyHtml, "href=\"javascript:");
+    Contains(document.BodyHtml, "<strong>Safe</strong>");
+    Equal(true, new Uri(MarkdownRenderer.LocalOrigin).Host.EndsWith(".invalid", StringComparison.Ordinal));
 }
 
 static void Contains(string actual, string expected)

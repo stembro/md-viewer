@@ -1,4 +1,5 @@
 using System.Windows;
+using System.IO;
 
 namespace MarkdownViewer;
 
@@ -7,7 +8,16 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        var paths = e.Args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
+        var args = e.Args.ToList();
+        var reportIndex = args.IndexOf("--performance-report");
+        if (reportIndex >= 0 && reportIndex + 1 < args.Count)
+        {
+            StartupMetrics.ReportPath = Path.GetFullPath(args[reportIndex + 1]);
+            StartupMetrics.ProfileDirectory = Path.Combine(Path.GetDirectoryName(StartupMetrics.ReportPath)!, "profile");
+            args.RemoveRange(reportIndex, 2);
+        }
+        StartupMetrics.Mark("managedStartupMs");
+        var paths = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
         if (paths.Length == 0) new MainWindow(null).Show();
         else foreach (var path in paths) new MainWindow(path).Show();
     }

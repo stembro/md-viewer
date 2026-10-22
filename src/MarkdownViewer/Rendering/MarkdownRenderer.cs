@@ -11,12 +11,17 @@ namespace MarkdownViewer.Rendering;
 
 public sealed record Heading(string Id, string Text, int Level);
 
-public sealed record RenderedDocument(string Html, IReadOnlyList<Heading> Headings, int WordCount);
+public sealed record RenderedDocument(string Html, IReadOnlyList<Heading> Headings, int WordCount)
+{
+    public string BodyHtml { get; init; } = "";
+}
 
 /// <summary>Produces a self-contained, script-free reading surface for a local Markdown document.</summary>
-public static class MarkdownRenderer
+public static partial class MarkdownRenderer
 {
-    public const string LocalOrigin = "https://markdown.local/";
+    // .local triggers mDNS resolution delays in WebView2, even for intercepted requests.
+    public const string LocalHost = "markdown.invalid";
+    public const string LocalOrigin = "https://" + LocalHost + "/";
 
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
         .UsePipeTables()
@@ -28,8 +33,10 @@ public static class MarkdownRenderer
         .DisableHtml()
         .Build();
 
-    private static readonly Regex Words = new(@"[\p{L}\p{N}]+(?:[’'-][\p{L}\p{N}]+)*", RegexOptions.Compiled);
-    private static readonly Regex Scheme = new(@"^[A-Za-z][A-Za-z0-9+.-]*:", RegexOptions.Compiled);
+    [GeneratedRegex(@"[\p{L}\p{N}]+(?:[’'-][\p{L}\p{N}]+)*")]
+    private static partial Regex Words();
+    [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9+.-]*:")]
+    private static partial Regex Scheme();
 
     public static RenderedDocument Render(string markdown, bool darkMode = false)
     {
@@ -51,23 +58,24 @@ public static class MarkdownRenderer
         renderer.Render(document);
         writer.Flush();
 
+        var body = writer.ToString();
         var html = $$"""
             <!doctype html>
             <html lang="en" data-theme="{{(darkMode ? "dark" : "light")}}">
             <head>
               <meta charset="utf-8">
-              <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; img-src https://markdown.local data:; style-src 'unsafe-inline'; base-uri https://markdown.local; form-action 'none'; object-src 'none'">
+              <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; img-src https://{{LocalHost}} data:; style-src 'unsafe-inline'; base-uri https://{{LocalHost}}; form-action 'none'; object-src 'none'">
               <meta name="referrer" content="no-referrer">
               <meta name="viewport" content="width=device-width, initial-scale=1">
               <base href="{{LocalOrigin}}">
               <title>Markdown Viewer</title>
               <style>{{DocumentStyles.Css}}</style>
             </head>
-            <body><main id="document" class="markdown-body">{{writer}}</main></body>
+            <body><main id="document" class="markdown-body">{{body}}</main></body>
             </html>
             """;
 
-        return new RenderedDocument(html, headings, Words.Matches(PlainText(document)).Count);
+        return new RenderedDocument(html, headings, Words().Count(PlainText(document))) { BodyHtml = body };
     }
 
     private static string PlainText(MarkdownObject node)
@@ -92,7 +100,7 @@ public static class MarkdownRenderer
             return "#";
 
         var trimmed = url.Trim();
-        if (!Scheme.IsMatch(trimmed))
+        if (!Scheme().IsMatch(trimmed))
             return trimmed;
 
         if (trimmed.StartsWith("https:", StringComparison.OrdinalIgnoreCase)

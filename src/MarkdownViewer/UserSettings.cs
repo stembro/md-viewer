@@ -9,7 +9,8 @@ internal sealed class UserSettings
     public bool ShowOutline { get; set; } = true;
     public double Zoom { get; set; } = 1;
     public List<string> RecentFiles { get; set; } = [];
-    public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MarkdownViewer");
+    public static string DataDirectory => StartupMetrics.ProfileDirectory
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MarkdownViewer");
     private static string FilePath => Path.Combine(DataDirectory, "settings.json");
 
     public static UserSettings Load()

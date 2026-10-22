@@ -44,6 +44,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build.ps1
 
 The Release build in `artifacts\app` includes the .NET runtime, this README, third-party notices, and sample documents in `examples`. Keep the entire folder together when copying the portable app to another Windows x64 computer. Package restore requires network access on the first build. Unless already configured, SDK state and NuGet packages stay in `.tools\dotnet-home` and `.tools\nuget` inside this project.
 
+Release publishing precompiles the app with ReadyToRun to reduce startup work. Document loading overlaps browser startup, and live updates reuse the open page. While editing, rendering waits until you select Read; saving still updates other viewer windows automatically. See [performance measurements and checks](PERFORMANCE.md) for results and reproduction steps.
+
 ## Install and enable double-click opening
 
 ```powershell

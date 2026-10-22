@@ -39,12 +39,12 @@ if (-not (Test-Path -LiteralPath $projectFile -PathType Leaf)) {
 }
 
 Write-Host "Building with $dotnetExecutable"
-& $dotnetExecutable publish $projectFile --configuration $Configuration --runtime win-x64 --self-contained true --output $outputDirectory
+& $dotnetExecutable publish $projectFile --configuration $Configuration --runtime win-x64 --self-contained true --output $outputDirectory -p:PublishReadyToRun=true
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
 if (-not (Test-Path -LiteralPath (Join-Path $outputDirectory 'MarkdownViewer.exe') -PathType Leaf)) {
     throw 'Publishing finished without producing MarkdownViewer.exe.'
 }
-foreach ($fileName in @('README.md', 'THIRD-PARTY-NOTICES.md')) {
+foreach ($fileName in @('README.md', 'PERFORMANCE.md', 'THIRD-PARTY-NOTICES.md')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $fileName) -Destination $outputDirectory -Force
 }
 $publishedExamples = Join-Path $outputDirectory 'examples'

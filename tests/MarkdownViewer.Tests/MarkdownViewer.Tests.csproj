@@ -9,5 +9,6 @@
   <ItemGroup>
     <PackageReference Include="Markdig" Version="1.3.2" />
     <Compile Include="../../src/MarkdownViewer/Rendering/*.cs" Link="Rendering/%(Filename)%(Extension)" />
+    <Compile Include="../../src/MarkdownViewer/MarkdownTextFile.cs" Link="MarkdownTextFile.cs" />
   </ItemGroup>
 </Project>

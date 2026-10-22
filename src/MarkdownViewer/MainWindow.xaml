@@ -55,7 +55,11 @@
      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
      <TextBlock Text="ON THIS PAGE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" Margin="10,0,0,16"/>
      <Grid Grid.Row="1">
-      <ListBox x:Name="OutlineList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="Outline_SelectionChanged" AutomationProperties.Name="Document outline"/>
+      <ListBox x:Name="OutlineList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" SelectionChanged="Outline_SelectionChanged" AutomationProperties.Name="Document outline">
+       <ListBox.ItemTemplate><DataTemplate>
+        <TextBlock Text="{Binding Text}" ToolTip="{Binding Text}" Margin="{Binding Indent}" TextTrimming="CharacterEllipsis"/>
+       </DataTemplate></ListBox.ItemTemplate>
+      </ListBox>
       <TextBlock x:Name="OutlineEmpty" Text="Headings will appear here." FontSize="12" Foreground="{DynamicResource Muted}" Margin="10,8" TextWrapping="Wrap"/>
      </Grid>
      <StackPanel Grid.Row="2" Margin="10,16,0,0"><TextBlock Text="A little space to read." Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock Text="MARKDOWN VIEWER" Foreground="{DynamicResource Muted}" FontSize="9" Margin="0,7,0,0"/></StackPanel>
