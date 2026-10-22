@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace MarkdownViewer;
@@ -25,8 +26,8 @@ public partial class MainWindow
     {
         FilesSidebar.Visibility = FilesSplitter.Visibility = _settings.ShowFiles ? Visibility.Visible : Visibility.Collapsed;
         OutlineSidebar.Visibility = OutlineSplitter.Visibility = _settings.ShowOutline ? Visibility.Visible : Visibility.Collapsed;
-        FilesSplitterColumn.Width = new GridLength(_settings.ShowFiles ? 4 : 0);
-        OutlineSplitterColumn.Width = new GridLength(_settings.ShowOutline ? 4 : 0);
+        FilesSplitterColumn.Width = new GridLength(_settings.ShowFiles ? 6 : 0);
+        OutlineSplitterColumn.Width = new GridLength(_settings.ShowOutline ? 6 : 0);
         ApplySidebarWidths();
         UpdateSidebarButtons();
     }
@@ -66,18 +67,26 @@ public partial class MainWindow
 
     private void FilesSplitter_DragCompleted(object sender, DragCompletedEventArgs e)
     {
-        if (!_settings.ShowFiles) return;
-        _settings.SidebarWidth = Math.Clamp(FilesColumn.ActualWidth, 200, 480);
+        if (!_settings.ShowFiles || e.Canceled) return;
+        // GridSplitter updates Width before WPF recomputes ActualWidth.
+        _settings.SidebarWidth = Math.Clamp(FilesColumn.Width.Value, 200, 480);
         ApplySidebarWidths();
         _settings.Save();
     }
 
     private void OutlineSplitter_DragCompleted(object sender, DragCompletedEventArgs e)
     {
-        if (!_settings.ShowOutline) return;
-        _settings.OutlineWidth = Math.Clamp(OutlineColumn.ActualWidth, 200, 480);
+        if (!_settings.ShowOutline || e.Canceled) return;
+        _settings.OutlineWidth = Math.Clamp(OutlineColumn.Width.Value, 200, 480);
         ApplySidebarWidths();
         _settings.Save();
+    }
+
+    private void PanelSplitter_KeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Left or Key.Right)) return;
+        if (ReferenceEquals(sender, FilesSplitter)) FilesSplitter_DragCompleted(sender, new DragCompletedEventArgs(0, 0, false));
+        else OutlineSplitter_DragCompleted(sender, new DragCompletedEventArgs(0, 0, false));
     }
 
     private void UpdateSidebarButtons()

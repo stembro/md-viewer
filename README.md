@@ -25,7 +25,7 @@ Opening a file from the tree, a link, Recent files, or **Open** creates a tab or
 
 Each document keeps its own Read/Edit mode, reading position, editor cursor and selection, and undo/redo history while the app is open. The Files panel is shared, and Outline follows the selected document. Switching away from an editor saves pending changes immediately when possible. A conflicting or failed save keeps the draft in its original tab, so you can continue using other documents safely. An edit label identifies editor tabs; a dot marks pending changes, and **!** marks an external conflict.
 
-Use **Ctrl+Tab / Ctrl+Shift+Tab** to switch tabs and **Ctrl+W**, the tab's close button, or a middle click to close one. Closing a tab or window checks every affected draft before discarding it. Closing the last tab shows the welcome page.
+Use **Ctrl+Tab / Ctrl+Shift+Tab** to switch tabs and **Ctrl+W**, the tab's close button, or a middle click anywhere on the tab to close one. Right-click a tab for **Close**, **Close other tabs**, **Close tabs to the right**, or **Close all tabs**. Closing a tab or window checks every affected draft before discarding it; canceling stops a bulk close. Closing the last tab shows the welcome page.
 
 Normal startup restores the last workspace's open documents, active tab, modes, and positions. Restored tabs load their contents when selected. Saved source files provide the document text; undo history lasts for the current app session. Missing files are skipped during restore. **Open in new window** creates a separate viewer for a second view of a document and leaves the saved workspace intact.
 
@@ -36,6 +36,10 @@ Click **Folder** or press **Ctrl+Shift+O**, then choose a folder such as `C:\Dev
 The folder choice and each panel's visibility and width are remembered. Outline starts hidden in a fresh installation; upgrades preserve the previously visible pane. Panels shrink temporarily in narrower windows to leave space for the document. Opening a folder with no document open displays its root `README.md` when one exists. You can also drop a folder onto the window or pass its path on the command line. **More → Browse this file's folder** opens the current document's containing folder in the tree.
 
 The tree lists `.md`, `.markdown`, `.mdown`, and `.mkd` files and omits hidden/system entries, `.git`, and linked directories. Subfolders load when expanded. Additions, renames, and removals update loaded branches automatically; the folder header also has a Refresh button. Right-click a file for **Open in new window**, useful for keeping an editing window and a rendered preview side by side. File switching keeps conflicting drafts in their own tabs. Closing the folder leaves the open documents intact.
+
+The top-bar **Folder** button chooses the workspace folder. The **+** button in Files creates a Markdown file in the selected folder (or beside the selected file) and opens it in Edit mode. Right-click a file, folder, or empty tree area for **New Markdown file…** and **New folder…**. Right-click a file for **Rename…** or **Delete…**; **F2** and **Delete** work when the tree has focus. Renaming updates open tabs and preserves their editor buffers and undo history. Existing files are never overwritten by New or Rename. Delete confirms the action and moves the file to the Recycle Bin; it stops if an open draft cannot be saved.
+
+Drag the divider beside either panel to resize it live. The dividers also support the left/right arrow keys when focused, and each panel remembers its width.
 
 ## Keyboard shortcuts
 

@@ -14,7 +14,7 @@ public partial class MainWindow
 {
     private sealed class DocumentTab(string path) : INotifyPropertyChanged
     {
-        public string Path { get; } = path;
+        public string Path { get; private set; } = path;
         public string Name => System.IO.Path.GetFileName(Path);
         public string Mode => IsEditing ? "Edit" : "";
         public string Indicator => ExternalConflict ? "!" : IsDirty ? "●" : "";
@@ -30,6 +30,7 @@ public partial class MainWindow
         public FileSystemWatcher? Watcher;
         public event PropertyChangedEventHandler? PropertyChanged;
         public void Notify() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
+        public void Rename(string newPath) { Path = newPath; Position.Path = newPath; Notify(); }
     }
 
     private readonly ObservableCollection<DocumentTab> _tabs = [];
@@ -249,40 +250,75 @@ public partial class MainWindow
         e.Handled = true;
     }
 
-    private async void Tab_MouseDown(object sender, MouseButtonEventArgs e)
+    private async void TabList_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton != MouseButton.Middle || sender is not FrameworkElement { DataContext: DocumentTab tab }) return;
+        if (e.ChangedButton is not (MouseButton.Middle or MouseButton.Right)
+            || e.OriginalSource is not DependencyObject source
+            || ItemsControl.ContainerFromElement(TabList, source) is not ListBoxItem { DataContext: DocumentTab tab } item) return;
         e.Handled = true;
-        await CloseTabAsync(tab);
+        if (e.ChangedButton == MouseButton.Middle) await CloseTabAsync(tab);
+        else BuildTabMenu(tab, item).IsOpen = true;
     }
 
-    private async Task CloseTabAsync(DocumentTab tab)
+    private void TabList_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        if (_closingWorkspace || _closed) return;
+        e.Handled = true;
+        if (TabList.SelectedItem is DocumentTab tab) BuildTabMenu(tab, TabList).IsOpen = true;
+    }
+
+    private ContextMenu BuildTabMenu(DocumentTab tab, FrameworkElement target)
+    {
+        var menu = CreateAppMenu(target);
+        AddMenuItem(menu, "Close", async () => { await CloseTabAsync(tab); }, shortcut: "Ctrl+W");
+        AddMenuItem(menu, "Close other tabs", () => CloseTabsAsync(_tabs.Where(t => !ReferenceEquals(t, tab)).ToArray()), _tabs.Count > 1);
+        var index = _tabs.IndexOf(tab);
+        AddMenuItem(menu, "Close tabs to the right", () => CloseTabsAsync(_tabs.Skip(_tabs.IndexOf(tab) + 1).ToArray()), index < _tabs.Count - 1);
+        AddMenuSeparator(menu);
+        AddMenuItem(menu, "Close all tabs", () => CloseTabsAsync(_tabs.ToArray()));
+        return menu;
+    }
+
+    private async Task CloseTabsAsync(IEnumerable<DocumentTab> tabs)
+    {
+        foreach (var tab in tabs.ToArray()) if (!await CloseTabAsync(tab)) break;
+    }
+
+    private async Task<bool> CloseTabAsync(DocumentTab tab)
+    {
+        if (_closingWorkspace || _closed) return false;
         await _documentGate.WaitAsync();
         try
         {
-            if (!_tabs.Contains(tab)) return;
+            if (!_tabs.Contains(tab)) return true;
             var prior = _activeTab;
             if (tab.IsDirty && !ReferenceEquals(tab, _activeTab)) await ActivateTabCoreAsync(tab);
             if (ReferenceEquals(tab, _activeTab))
             {
                 await SaveEditorAsync();
-                if (!await ConfirmDraftCloseAsync()) return;
-                var index = _tabs.IndexOf(tab);
-                await CaptureActiveTabAsync();
-                _activeTab = null;
-                _tabs.Remove(tab);
-                tab.Watcher?.Dispose();
-                ResetDocumentFields();
-                if (_tabs.Count > 0)
-                    await ActivateTabCoreAsync(prior is not null && _tabs.Contains(prior) ? prior : _tabs[Math.Min(index, _tabs.Count - 1)]);
-                else ResetEmptyWorkspace();
+                if (!await ConfirmDraftCloseAsync()) return false;
             }
-            else { _tabs.Remove(tab); tab.Watcher?.Dispose(); SelectActiveTab(); }
+            await RemoveTabCoreAsync(tab, prior);
             SaveWorkspace();
+            return true;
         }
         finally { _documentGate.Release(); }
+    }
+
+    private async Task RemoveTabCoreAsync(DocumentTab tab, DocumentTab? preferred = null)
+    {
+        if (ReferenceEquals(tab, _activeTab))
+        {
+            var index = _tabs.IndexOf(tab);
+            await CaptureActiveTabAsync();
+            _activeTab = null;
+            _tabs.Remove(tab);
+            tab.Watcher?.Dispose();
+            ResetDocumentFields();
+            if (_tabs.Count > 0)
+                await ActivateTabCoreAsync(preferred is not null && _tabs.Contains(preferred) ? preferred : _tabs[Math.Min(index, _tabs.Count - 1)]);
+            else ResetEmptyWorkspace();
+        }
+        else { _tabs.Remove(tab); tab.Watcher?.Dispose(); SelectActiveTab(); }
     }
 
     private async Task<bool> ConfirmDraftCloseAsync()

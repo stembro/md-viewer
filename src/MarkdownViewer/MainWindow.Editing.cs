@@ -90,11 +90,7 @@ public partial class MainWindow
     private void EditorMenu_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: string group } button) return;
-        var menu = new ContextMenu
-        {
-            PlacementTarget = button, Background = (Brush)Resources["Panel"],
-            Foreground = (Brush)Resources["Ink"], BorderBrush = (Brush)Resources["Line"]
-        };
+        var menu = CreateAppMenu(button);
         menu.Resources[SystemColors.MenuBrushKey] = (Brush)Resources["Panel"];
         menu.Resources[SystemColors.MenuTextBrushKey] = (Brush)Resources["Ink"];
         menu.Resources[SystemColors.HighlightBrushKey] = (Brush)Resources["Hover"];

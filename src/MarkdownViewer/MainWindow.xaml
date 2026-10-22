@@ -7,6 +7,20 @@
  WindowStartupLocation="CenterScreen" AllowDrop="True" PreviewDrop="Window_Drop" PreviewDragOver="Window_DragOver"
  PreviewKeyDown="Window_PreviewKeyDown" Loaded="Window_Loaded" Closing="Window_Closing">
  <Window.Resources>
+  <Style x:Key="PanelSplitterStyle" TargetType="GridSplitter">
+   <Setter Property="Width" Value="6"/><Setter Property="HorizontalAlignment" Value="Stretch"/><Setter Property="VerticalAlignment" Value="Stretch"/>
+   <Setter Property="Background" Value="Transparent"/><Setter Property="Cursor" Value="SizeWE"/>
+   <Setter Property="ResizeDirection" Value="Columns"/><Setter Property="ResizeBehavior" Value="PreviousAndNext"/><Setter Property="ShowsPreview" Value="False"/>
+   <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource Line}"/></Trigger><Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="Background" Value="{DynamicResource Accent}"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="AppContextMenuStyle" TargetType="ContextMenu">
+   <Setter Property="Background" Value="{DynamicResource Panel}"/><Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+   <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ContextMenu">
+    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="4" SnapsToDevicePixels="True"><StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/></Border>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="MenuSeparatorStyle" TargetType="Separator"><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Separator"><Border Height="1" Background="{DynamicResource Line}" Margin="8,4"/></ControlTemplate></Setter.Value></Setter></Style>
   <Style x:Key="DocumentTabStyle" TargetType="ListBoxItem">
    <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
    <Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="0"/>
@@ -66,7 +80,7 @@
    <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
    <Setter Property="Padding" Value="12,8"/>
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
-    <Border x:Name="Plate" Background="Transparent" Padding="{TemplateBinding Padding}" CornerRadius="4"><ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/></Border>
+    <Border x:Name="Plate" Background="Transparent" Padding="{TemplateBinding Padding}" CornerRadius="4"><Grid MinWidth="170"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/><TextBlock Grid.Column="1" Text="{TemplateBinding InputGestureText}" Foreground="{DynamicResource Muted}" Margin="24,0,0,0"/></Grid></Border>
     <ControlTemplate.Triggers>
      <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Plate" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
      <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Plate" Property="Opacity" Value="0.45"/></Trigger>
@@ -132,13 +146,13 @@
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <DockPanel Margin="6,0,0,10">
        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-        <Button Style="{StaticResource IconButton}" Width="28" Height="28" Click="ChooseFolder_Click" ToolTip="Choose a folder" AutomationProperties.Name="Choose a folder"><Path Data="{StaticResource FolderGlyph}" Width="13" Height="12" Stretch="Uniform" Stroke="{DynamicResource Ink}" StrokeThickness="1.2"/></Button>
+        <Button x:Name="NewDocumentButton" Style="{StaticResource IconButton}" Width="28" Height="28" Content="&#xE710;" Click="NewDocument_Click" ToolTip="New Markdown file" AutomationProperties.Name="New Markdown file" IsEnabled="False"/>
         <Button x:Name="RefreshFolderButton" Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="12" Content="&#xE72C;" Click="RefreshFolder_Click" ToolTip="Refresh folder tree" AutomationProperties.Name="Refresh folder tree" IsEnabled="False"/>
         <Button x:Name="CloseFolderButton" Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="11" Content="&#xE711;" Click="CloseFolder_Click" ToolTip="Close folder" AutomationProperties.Name="Close folder" IsEnabled="False"/>
        </StackPanel>
        <TextBlock x:Name="FolderNameText" Text="No folder open" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
       </DockPanel>
-      <TreeView x:Name="FolderTree" Grid.Row="1" Background="Transparent" BorderThickness="0" ItemContainerStyle="{StaticResource FolderTreeItemStyle}" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectedItemChanged="FolderTree_SelectedItemChanged" TreeViewItem.Expanded="FolderTree_Expanded" ContextMenuOpening="FolderTree_ContextMenuOpening" AutomationProperties.Name="Markdown files and folders">
+      <TreeView x:Name="FolderTree" Grid.Row="1" Background="Transparent" BorderThickness="0" ItemContainerStyle="{StaticResource FolderTreeItemStyle}" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectedItemChanged="FolderTree_SelectedItemChanged" TreeViewItem.Expanded="FolderTree_Expanded" PreviewKeyDown="FolderTree_PreviewKeyDown" ContextMenuOpening="FolderTree_ContextMenuOpening" AutomationProperties.Name="Markdown files and folders">
        <TreeView.ContextMenu><ContextMenu/></TreeView.ContextMenu>
        <TreeView.Template><ControlTemplate TargetType="TreeView"><Border Background="{TemplateBinding Background}"><ScrollViewer Focusable="False" CanContentScroll="True" HorizontalScrollBarVisibility="Disabled"><ItemsPresenter/></ScrollViewer></Border></ControlTemplate></TreeView.Template>
       </TreeView>
@@ -150,8 +164,8 @@
      <StackPanel Grid.Row="2" Margin="26,12,16,16"><TextBlock Text="A little space to read." Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock Text="MARKDOWN VIEWER" Foreground="{DynamicResource Muted}" FontSize="9" Margin="0,7,0,0"/></StackPanel>
     </Grid>
    </Border>
-   <GridSplitter x:Name="FilesSplitter" Grid.Column="1" Width="4" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="True" DragCompleted="FilesSplitter_DragCompleted" ToolTip="Resize files panel" AutomationProperties.Name="Resize files panel"/>
-   <GridSplitter x:Name="OutlineSplitter" Grid.Column="3" Width="4" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="True" DragCompleted="OutlineSplitter_DragCompleted" ToolTip="Resize outline panel" AutomationProperties.Name="Resize outline panel"/>
+   <GridSplitter x:Name="FilesSplitter" Grid.Column="1" Style="{StaticResource PanelSplitterStyle}" DragCompleted="FilesSplitter_DragCompleted" KeyUp="PanelSplitter_KeyUp" ToolTip="Resize files panel" AutomationProperties.Name="Resize files panel"/>
+   <GridSplitter x:Name="OutlineSplitter" Grid.Column="3" Style="{StaticResource PanelSplitterStyle}" DragCompleted="OutlineSplitter_DragCompleted" KeyUp="PanelSplitter_KeyUp" ToolTip="Resize outline panel" AutomationProperties.Name="Resize outline panel"/>
    <Border x:Name="OutlineSidebar" Grid.Column="4" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1,0,0,0">
      <Grid x:Name="OutlinePane" Margin="12,12,10,8">
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
@@ -175,11 +189,12 @@
    <Grid Grid.Column="2" Background="{DynamicResource Surface}">
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <Border x:Name="TabBar" Visibility="Collapsed" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
-     <ListBox x:Name="TabList" Background="Transparent" BorderThickness="0" Padding="0" MinHeight="42" MaxHeight="62" ItemContainerStyle="{StaticResource DocumentTabStyle}" SelectionChanged="TabList_SelectionChanged" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Disabled" AutomationProperties.Name="Open documents">
+     <ListBox x:Name="TabList" Background="Transparent" BorderThickness="0" Padding="0" MinHeight="42" MaxHeight="62" ItemContainerStyle="{StaticResource DocumentTabStyle}" SelectionChanged="TabList_SelectionChanged" ContextMenuOpening="TabList_ContextMenuOpening" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Disabled" AutomationProperties.Name="Open documents">
+      <ListBox.ContextMenu><ContextMenu/></ListBox.ContextMenu>
       <ListBox.Template><ControlTemplate TargetType="ListBox"><ScrollViewer CanContentScroll="True" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Focusable="False"><ItemsPresenter/></ScrollViewer></ControlTemplate></ListBox.Template>
       <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ListBox.ItemsPanel>
       <ListBox.ItemTemplate><DataTemplate>
-       <Grid MinWidth="110" MaxWidth="230" Height="40" Margin="12,0,4,0" ToolTip="{Binding Description}" PreviewMouseDown="Tab_MouseDown">
+       <Grid MinWidth="110" MaxWidth="230" Height="40" Margin="12,0,4,0" ToolTip="{Binding Description}">
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontSize="12" VerticalAlignment="Center"/>
         <TextBlock Grid.Column="1" Text="{Binding Mode}" FontSize="10" Foreground="{DynamicResource Muted}" Margin="8,0,0,0" VerticalAlignment="Center"/>

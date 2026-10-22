@@ -49,7 +49,8 @@ var tests = new (string Name, Action Run)[]
     ("Folder refresh retains selection and recovers from errors", FolderRefresh),
     ("Inactive windows preserve newer navigation preferences", FolderPreferences),
     ("Legacy sidebar preferences migrate to independent panels", SidebarMigration),
-    ("Workspace sessions preserve tabs and filter missing or invalid paths", WorkspacePersistence)
+    ("Workspace sessions preserve tabs and filter missing or invalid paths", WorkspacePersistence),
+    ("New and renamed files use valid local Markdown names", FileNaming)
 };
 
 var failures = 0;
@@ -310,6 +311,24 @@ static void FolderPreferences()
         Equal(false, hidden.ShowOutline);
     }
     finally { StartupMetrics.ProfileDirectory = previousProfile; }
+}
+
+static void FileNaming()
+{
+    var directory = FolderFixture();
+    Equal(Path.Combine(directory, "A note.md"), FileNames.Resolve(directory, "A note"));
+    Equal(Path.Combine(directory, "Renamed.markdown"), FileNames.Resolve(directory, "Renamed", extension: ".markdown"));
+    Equal(Path.Combine(directory, "A folder"), FileNames.Resolve(directory, "A folder", false));
+    foreach (var name in new[] { "", "..", "../escaped.md", @"child\escaped.md", "C:stream.md", "CON.md", "COM1.md", "LPT9.md", "trailing.", "wrong.txt" })
+    {
+        var rejected = false;
+        try { FileNames.Resolve(directory, name); }
+        catch (ArgumentException) { rejected = true; }
+        Equal(true, rejected);
+    }
+    File.WriteAllText(Path.Combine(directory, "Untitled.md"), "keep me");
+    Equal("Untitled 2.md", FileNames.Suggest(directory, "Untitled", ".md"));
+    Equal("keep me", File.ReadAllText(Path.Combine(directory, "Untitled.md")));
 }
 
 static void WorkspacePersistence()

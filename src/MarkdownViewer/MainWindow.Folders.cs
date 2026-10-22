@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
+using System.Windows.Input;
 using System.Windows.Threading;
 using MarkdownViewer.Browsing;
 using Microsoft.Win32;
@@ -78,7 +78,7 @@ public partial class MainWindow
             finally { _suppressFolderNavigation = false; }
             FolderNameText.Text = root.Name;
             FolderNameText.ToolTip = path;
-            RefreshFolderButton.IsEnabled = CloseFolderButton.IsEnabled = true;
+            NewDocumentButton.IsEnabled = RefreshFolderButton.IsEnabled = CloseFolderButton.IsEnabled = true;
             _settings.LastFolder = path;
             if (!restore) _settings.ShowFiles = true;
             ApplySidebars();
@@ -255,7 +255,7 @@ public partial class MainWindow
         _settings.LastFolder = null;
         FolderNameText.Text = "No folder open";
         FolderNameText.ToolTip = null;
-        RefreshFolderButton.IsEnabled = CloseFolderButton.IsEnabled = false;
+        NewDocumentButton.IsEnabled = RefreshFolderButton.IsEnabled = CloseFolderButton.IsEnabled = false;
         UpdateFolderEmpty();
         _settings.Save();
     }
@@ -273,27 +273,45 @@ public partial class MainWindow
     private void FolderTree_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
         e.Handled = true;
-        if (e.OriginalSource is not FrameworkElement { DataContext: FolderNode { IsPlaceholder: false } node } element) return;
-        var menu = new ContextMenu { PlacementTarget = element, Background = (Brush)Resources["Panel"], Foreground = (Brush)Resources["Ink"] };
-        menu.Resources["Ink"] = (Brush)Resources["Ink"];
-        menu.Resources["Hover"] = (Brush)Resources["Hover"];
-        void Item(string label, Action action)
-        {
-            var item = new MenuItem { Header = label, Style = (Style)FindResource("EditorMenuItemStyle") };
-            item.Click += (_, _) => action();
-            menu.Items.Add(item);
-        }
-        if (node.IsDirectory) Item("Open this folder", () => _ = SetFolderAsync(node.FullPath));
+        if (FolderTree.SelectedItem is FolderNode { IsPlaceholder: false } node) BuildFolderMenu(node, FolderTree).IsOpen = true;
+        else if (_folderRoot is not null) BuildFolderMenu(_folderRoot, FolderTree).IsOpen = true;
+    }
+
+    private void FolderTree_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Right || e.OriginalSource is not DependencyObject source) return;
+        var item = ItemsControl.ContainerFromElement(null, source) as TreeViewItem;
+        var node = item?.DataContext as FolderNode ?? _folderRoot;
+        if (node is null || node.IsPlaceholder) { e.Handled = true; return; }
+        e.Handled = true;
+        BuildFolderMenu(node, item ?? (FrameworkElement)FolderTree).IsOpen = true;
+    }
+
+    private ContextMenu BuildFolderMenu(FolderNode node, FrameworkElement target)
+    {
+        var menu = CreateAppMenu(target);
+        if (node.IsDirectory) AddMenuItem(menu, "Open this folder", () => SetFolderAsync(node.FullPath));
         else
         {
-            Item("Open", () => _ = OpenDocumentAsync(node.FullPath));
-            Item("Open in new window", () => new MainWindow(node.FullPath, restoreWorkspace: false).Show());
+            AddMenuItem(menu, "Open", () => OpenDocumentAsync(node.FullPath));
+            AddMenuItem(menu, "Open in new window", () => { new MainWindow(node.FullPath, restoreWorkspace: false).Show(); return Task.CompletedTask; });
         }
-        Item("Show in File Explorer", () =>
+        AddMenuSeparator(menu);
+        var directory = node.IsDirectory ? node.FullPath : Path.GetDirectoryName(node.FullPath)!;
+        AddMenuItem(menu, "New Markdown file…", () => PromptNewEntryAsync(directory, false));
+        AddMenuItem(menu, "New folder…", () => PromptNewEntryAsync(directory, true));
+        if (!node.IsDirectory)
+        {
+            AddMenuItem(menu, "Rename…", () => PromptRenameAsync(node.FullPath), shortcut: "F2");
+            AddMenuItem(menu, "Delete…", () => ConfirmDeleteAsync(node.FullPath), shortcut: "Del");
+        }
+        AddMenuSeparator(menu);
+        AddMenuItem(menu, "Show in File Explorer", () =>
         {
             try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{node.FullPath}\"") { UseShellExecute = true }); }
             catch (Exception ex) { ShowNotice(ex.Message); }
+            return Task.CompletedTask;
         });
-        menu.IsOpen = true;
+        return menu;
     }
 }

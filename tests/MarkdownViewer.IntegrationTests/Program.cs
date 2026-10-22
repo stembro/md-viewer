@@ -210,12 +210,8 @@ internal static class IntegrationChecks
                 Equal(beforeToggle, editor.Text, "Panel shortcuts must leave the editor text unchanged.");
                 Call(editWindow, "HandleShortcut", Key.B, ModifierKeys.Control | ModifierKeys.Shift);
                 await (Task)Call(editWindow, "ReturnToReadingModeAsync")!;
-                filesColumn.Width = new GridLength(320);
-                editWindow.UpdateLayout();
-                Call(editWindow, "FilesSplitter_DragCompleted", editWindow, new DragCompletedEventArgs(60, 0, false));
-                outlineColumn.Width = new GridLength(260);
-                editWindow.UpdateLayout();
-                Call(editWindow, "OutlineSplitter_DragCompleted", editWindow, new DragCompletedEventArgs(-20, 0, false));
+                DragSplitter(editWindow, "FilesSplitter", 60);
+                DragSplitter(editWindow, "OutlineSplitter", -20);
                 Equal(320d, (double)settings.GetType().GetProperty("SidebarWidth")!.GetValue(settings)!, "Files width must be remembered independently.");
                 Equal(260d, (double)settings.GetType().GetProperty("OutlineWidth")!.GetValue(settings)!, "Outline width must be remembered independently.");
                 editWindow.Width = 800;
@@ -272,6 +268,8 @@ internal static class IntegrationChecks
                 typeof(MainWindow).GetField("_isDirty", Private)!.SetValue(editWindow, false);
                 Call(editWindow, "LeaveEditMode");
                 await CheckTabs(editWindow, directory, workspacePath);
+                await CheckTabMouseAndMenus(editWindow, directory);
+                await CheckFileOperations(editWindow, directory);
                 Close(editWindow);
                 Close(viewWindow);
                 app.Shutdown(0);
@@ -285,6 +283,129 @@ internal static class IntegrationChecks
             }
         };
         return app.Run(editWindow);
+    }
+
+    private static void DragSplitter(MainWindow window, string name, double delta)
+    {
+        var splitter = (GridSplitter)window.FindName(name);
+        splitter.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
+        splitter.RaiseEvent(new DragDeltaEventArgs(delta, 0) { RoutedEvent = Thumb.DragDeltaEvent });
+        // Deliberately finish before layout catches up: this reproduced the bug.
+        splitter.RaiseEvent(new DragCompletedEventArgs(delta, 0, false) { RoutedEvent = Thumb.DragCompletedEvent });
+        window.UpdateLayout();
+    }
+
+    private static async Task CheckTabMouseAndMenus(MainWindow window, string directory)
+    {
+        var list = (ListBox)window.FindName("TabList");
+        var files = Enumerable.Range(1, 3).Select(i => Path.Combine(directory, $"mouse-tab-{i}.md")).ToArray();
+        foreach (var file in files) { File.WriteAllText(file, "# Mouse tab\n"); await Open(file); }
+        window.UpdateLayout();
+        var first = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(0);
+        var middle = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Middle) { RoutedEvent = Mouse.PreviewMouseDownEvent };
+        first.RaiseEvent(middle);
+        await Until(() => Task.FromResult(list.Items.Count == 2 && Field(window, "_switchingDocuments") is false));
+        Equal(true, middle.Handled, "Middle click anywhere on the tab container must close the tab.");
+        Equal(files[2], Field(window, "_currentPath") as string, "Closing an inactive tab must not switch documents.");
+        window.UpdateLayout();
+        var other = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(0);
+        other.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Right) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+        await Until(() => Task.FromResult(Field(window, "_openContextMenu") is ContextMenu { IsOpen: true }));
+        var menu = (ContextMenu)Field(window, "_openContextMenu")!;
+        Equal(true, menu.IsOpen, "Right click must open a tab context menu.");
+        Menu(menu, "Close other tabs").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        menu.IsOpen = false;
+        await Until(() => Task.FromResult(list.Items.Count == 1 && Field(window, "_switchingDocuments") is false));
+        Equal(files[1], Field(window, "_currentPath") as string, "Close other tabs must retain the right-clicked document.");
+        await Open(files[0]); await Open(files[2]);
+        menu = (ContextMenu)Call(window, "BuildTabMenu", list.Items[0], list)!;
+        Menu(menu, "Close tabs to the right").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        await Until(() => Task.FromResult(list.Items.Count == 1 && Field(window, "_switchingDocuments") is false));
+        menu = (ContextMenu)Call(window, "BuildTabMenu", list.Items[0], list)!;
+        Menu(menu, "Close all tabs").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        await Until(() => Task.FromResult(list.Items.Count == 0));
+        Console.WriteLine("PASS  Routed middle/right mouse events and tab close-other/close-right/close-all menus.");
+        async Task Open(string path) => await (Task)Call(window, "OpenDocumentAsync", path, true, null, false, false, false)!;
+    }
+
+    private static MenuItem Menu(ContextMenu menu, string header) => menu.Items.OfType<MenuItem>().Single(i => i.Header as string == header);
+
+    private static async Task CheckFileOperations(MainWindow window, string directory)
+    {
+        var folder = Path.Combine(directory, "file-operations-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        await (Task)Call(window, "SetFolderAsync", folder, false)!;
+        await (Task)Call(window, "CreateDocumentAsync", folder, "First note")!;
+        var original = Path.Combine(folder, "First note.md");
+        var renamed = Path.Combine(folder, "Renamed note.md");
+        Equal(true, File.Exists(original), "New note must create a Markdown file.");
+        Equal(true, Field(window, "_isEditing") is true, "A new note must open in Edit mode.");
+        var editor = (TextEditor)window.FindName("Editor");
+        editor.AppendText("A draft before renaming.\n"); editor.Select(2, 3);
+        ((System.Windows.Threading.DispatcherTimer)Field(window, "_autoSaveTimer")!).Stop();
+        var buffer = editor.Document;
+        Equal(true, await (Task<bool>)Call(window, "RenameDocumentAsync", original, "Renamed note")!, "Rename must succeed.");
+        Equal(false, File.Exists(original), "Rename must move the original path.");
+        Equal(renamed, Field(window, "_currentPath") as string, "Rename must update the active document path.");
+        Equal(true, ReferenceEquals(buffer, editor.Document), "Rename must retain the editor buffer and undo history.");
+        Equal(2, editor.SelectionStart, "Rename must retain the selection.");
+        Equal(true, await (Task<bool>)Call(window, "SaveEditorAsync", false)!, "Saving after rename must succeed at the new path.");
+        Equal("A draft before renaming.\n", File.ReadAllText(renamed).Replace("\r\n", "\n"), "Renamed edits must save to the new file.");
+        Equal(false, File.Exists(original), "Autosave must not recreate the old path.");
+        var caseRename = Path.Combine(folder, "RENAMED NOTE.md");
+        Equal(true, await (Task<bool>)Call(window, "RenameDocumentAsync", renamed, "RENAMED NOTE.md")!, "Case-only rename must work.");
+        renamed = caseRename;
+        var existing = Path.Combine(folder, "Existing.md"); File.WriteAllText(existing, "# Keep this file\n");
+        Equal(false, await (Task<bool>)Call(window, "RenameDocumentAsync", renamed, "Existing.md")!, "Rename must not overwrite an existing file.");
+        Equal("# Keep this file\n", File.ReadAllText(existing), "A conflicting rename must preserve the destination.");
+        await (Task)Call(window, "CreateDocumentAsync", folder, "Existing.md")!;
+        Equal("# Keep this file\n", File.ReadAllText(existing), "New note must not overwrite an existing file.");
+        await (Task)Call(window, "CreateFolderAsync", folder, "Subfolder")!;
+        var childFolder = Path.Combine(folder, "Subfolder");
+        await (Task)Call(window, "CreateDocumentAsync", childFolder, "Child.md")!;
+        var child = Path.Combine(childFolder, "Child.md");
+        Equal(true, File.Exists(child), "New notes must support a selected subfolder.");
+        Equal(true, await (Task<bool>)Call(window, "RenameDocumentAsync", renamed, "Archived note.md")!, "Inactive tabs must support rename.");
+        renamed = Path.Combine(folder, "Archived note.md");
+        Equal(child, Field(window, "_currentPath") as string, "Renaming another tab must not switch documents.");
+        var root = (FolderNode)Field(window, "_folderRoot")!;
+        var childNode = root.Children.Single(n => n.IsDirectory).Children.Single(n => n.Name == "Child.md");
+        var tree = (TreeView)window.FindName("FolderTree");
+        tree.UpdateLayout();
+        var folderItem = (TreeViewItem)tree.ItemContainerGenerator.ContainerFromItem(root.Children.Single(n => n.IsDirectory));
+        folderItem.UpdateLayout();
+        var childItem = (TreeViewItem)folderItem.ItemContainerGenerator.ContainerFromItem(childNode);
+        var settings = Field(window, "_settings")!;
+        foreach (var dark in new[] { true, false })
+        {
+            settings.GetType().GetProperty("DarkMode")!.SetValue(settings, dark); Call(window, "ApplyTheme");
+            childItem.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Right) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+            await Until(() => Task.FromResult(Field(window, "_openContextMenu") is ContextMenu { IsOpen: true }));
+            var menu = (ContextMenu)Field(window, "_openContextMenu")!;
+            Equal(true, Menu(menu, "Rename…").IsEnabled, "File menu must offer Rename.");
+            Equal(true, Menu(menu, "Delete…").IsEnabled, "File menu must offer Delete.");
+            menu.IsOpen = true; await Task.Delay(100); menu.UpdateLayout();
+            SnapshotElement(menu, Path.Combine(directory, dark ? "file-menu-dark.png" : "file-menu-light.png"));
+            menu.IsOpen = false;
+        }
+        Equal(true, await (Task<bool>)Call(window, "DeleteDocumentAsync", child)!, "Delete must move a generated note to the Recycle Bin.");
+        Equal(false, File.Exists(child), "Deleted files must leave the folder.");
+        Equal(false, ((ListBox)window.FindName("TabList")).Items.Cast<object>().Any(t => t.GetType().GetProperty("Path")!.GetValue(t) as string == child), "Delete must close its tab.");
+        await (Task)Call(window, "OpenDocumentAsync", renamed, true, null, false, false, false)!;
+        editor.AppendText("An unsaved conflict draft.\n"); File.WriteAllText(renamed, "# External version\n");
+        await Until(() => Task.FromResult(Field(window, "_externalConflict") is true));
+        Equal(false, await (Task<bool>)Call(window, "DeleteDocumentAsync", renamed)!, "Delete must stop when a draft cannot be saved.");
+        Equal(true, File.Exists(renamed), "A conflict must leave the file intact.");
+        Equal(true, editor.Text.Contains("An unsaved conflict draft."), "A blocked deletion must keep the draft.");
+        typeof(MainWindow).GetField("_isDirty", Private)!.SetValue(window, false); Call(window, "LeaveEditMode");
+        Equal(true, await (Task<bool>)Call(window, "DeleteDocumentAsync", renamed)!, "A clean tab can be deleted.");
+        Console.WriteLine("PASS  New notes/folders, rename with preserved editor state, collision protection, themed menus, recycling, and conflict-safe deletion.");
+    }
+
+    private static void SnapshotElement(FrameworkElement element, string path)
+    {
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(element.ActualWidth), (int)Math.Ceiling(element.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(element); SaveImage(bitmap, path);
     }
 
     private static async Task CheckTabs(MainWindow window, string directory, string workspacePath)

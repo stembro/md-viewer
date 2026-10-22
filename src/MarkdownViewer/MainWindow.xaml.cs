@@ -65,6 +65,8 @@ public partial class MainWindow : Window
         _additionalPaths = additionalPaths ?? [];
         InitializeComponent();
         TabList.ItemsSource = _tabs;
+        TabList.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(TabList_PreviewMouseDown), true);
+        FolderTree.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(FolderTree_PreviewMouseDown), true);
         ApplyTheme();
         ApplySidebars();
         InitializeFolderBrowser();
