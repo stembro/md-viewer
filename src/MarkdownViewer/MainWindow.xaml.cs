@@ -64,6 +64,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         ApplyTheme();
         ApplyOutline();
+        InitializeFolderBrowser();
         UpdateZoom();
         _reloadTimer.Tick += async (_, _) =>
         {
@@ -84,8 +85,11 @@ public partial class MainWindow : Window
         StartupMetrics.Mark("windowLoadedMs");
         try
         {
-            if (_initialPath is not null) await OpenDocumentAsync(_initialPath);
+            if (_initialPath is not null && Directory.Exists(_initialPath)) await Task.WhenAll(SetFolderAsync(_initialPath), EnsureReaderAsync());
+            else if (_initialPath is not null) await OpenDocumentAsync(_initialPath);
             else await EnsureReaderAsync();
+            if (_folderRoot is null && _settings.LastFolder is { } folder && StartupMetrics.ReportPath is null)
+                _ = SetFolderAsync(folder, restore: true);
         }
         catch (Exception ex) { ShowNotice("The reading engine could not start. Install or repair Microsoft Edge WebView2 Runtime. " + ex.Message); }
     }
@@ -208,7 +212,8 @@ public partial class MainWindow : Window
         // the browser navigation; only Markdown is opened through the normal file reader.
         if (uri.IsFile)
         {
-            await OpenDocumentAsync(uri.LocalPath);
+            if (Directory.Exists(uri.LocalPath)) await SetFolderAsync(uri.LocalPath);
+            else await OpenDocumentAsync(uri.LocalPath);
         }
         else if (uri.Host == MarkdownRenderer.LocalHost)
         {
@@ -217,6 +222,7 @@ public partial class MainWindow : Window
             {
                 // A fragment-only href resolves against the directory base.
                 if (Directory.Exists(path) && fragment.Length > 0) await ScrollToAsync(fragment);
+                else if (Directory.Exists(path)) await SetFolderAsync(path);
                 else if (string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase) && fragment.Length > 0) await ScrollToAsync(fragment);
                 else if (MarkdownExtensions.Contains(Path.GetExtension(path))) await OpenDocumentAsync(path, fragment: fragment);
                 else ShowNotice("This link isn't a Markdown file. Open the file from its folder instead.");
@@ -353,6 +359,7 @@ public partial class MainWindow : Window
                 _settings.Save();
             }
             WatchFile(path);
+            _ = RevealCurrentDocumentAsync();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or InvalidOperationException or COMException or WebView2RuntimeNotFoundException)
         {
@@ -721,6 +728,7 @@ public partial class MainWindow : Window
             try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_currentPath}\"") { UseShellExecute = true }); }
             catch (Exception ex) { ShowNotice(ex.Message); }
         }, _currentPath is not null);
+        Item("Browse this file's folder", () => { if (_currentPath is not null) _ = SetFolderAsync(Path.GetDirectoryName(_currentPath)!); }, _currentPath is not null);
         menu.Items.Add(new Separator());
         Item("Default app settings…", () =>
         {
@@ -756,7 +764,14 @@ public partial class MainWindow : Window
     private void UpdateHistoryButtons() { BackButton.IsEnabled = _historyIndex > 0; ForwardButton.IsEnabled = _historyIndex >= 0 && _historyIndex < _history.Count - 1; }
     private async void Outline_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (OutlineList.SelectedItem is OutlineItem item && !_isEditing) await ScrollToAsync(item.Id); }
     private void Outline_Click(object sender, RoutedEventArgs e) { _settings.ShowOutline = !_settings.ShowOutline; ApplyOutline(); }
-    private void ApplyOutline() { SidebarColumn.Width = new GridLength(_settings.ShowOutline ? 236 : 0); Sidebar.Visibility = _settings.ShowOutline ? Visibility.Visible : Visibility.Collapsed; }
+    private void ApplyOutline()
+    {
+        SidebarColumn.MinWidth = _settings.ShowOutline ? 200 : 0;
+        SidebarColumn.Width = new GridLength(_settings.ShowOutline ? _settings.SidebarWidth : 0);
+        SidebarSplitterColumn.Width = new GridLength(_settings.ShowOutline ? 4 : 0);
+        Sidebar.Visibility = SidebarSplitter.Visibility = _settings.ShowOutline ? Visibility.Visible : Visibility.Collapsed;
+        ApplySidebarTabs();
+    }
     private void Find_Click(object sender, RoutedEventArgs e) => ShowFind();
     private void ShowFind() { FindBar.Visibility = Visibility.Visible; FindBox.Focus(); FindBox.SelectAll(); }
     private void FindClose_Click(object sender, RoutedEventArgs e) => CloseFind();
@@ -815,6 +830,7 @@ public partial class MainWindow : Window
         ThemeButton.Content = _settings.DarkMode ? "\uE706" : "\uE708";
         ThemeButton.ToolTip = _settings.DarkMode ? "Switch to light theme" : "Switch to dark theme";
         if (_editor is not null) ApplyEditorTheme(_editor);
+        ApplySidebarTabs();
         ApplyTitleBarTheme();
     }
     private void ApplyTitleBarTheme()
@@ -836,7 +852,11 @@ public partial class MainWindow : Window
     private void Window_DragOver(object sender, DragEventArgs e) { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; }
     private async void Window_Drop(object sender, DragEventArgs e)
     {
-        if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files) await OpenDocumentAsync(files[0]);
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files)
+        {
+            if (Directory.Exists(files[0])) await SetFolderAsync(files[0]);
+            else await OpenDocumentAsync(files[0]);
+        }
         e.Handled = true;
     }
     private static bool IsAppShortcut(Key key, ModifierKeys modifiers) =>
@@ -859,7 +879,7 @@ public partial class MainWindow : Window
         {
             switch (key)
             {
-                case Key.O: await ChooseFileAsync(); break;
+                case Key.O: if (modifiers.HasFlag(ModifierKeys.Shift)) await ChooseFolderAsync(); else await ChooseFileAsync(); break;
                 case Key.F: ShowFind(); break;
                 case Key.B: Outline_Click(this, new RoutedEventArgs()); break;
                 case Key.P: Print(); break;
@@ -897,6 +917,7 @@ public partial class MainWindow : Window
         _reloadTimer.Stop();
         _autoSaveTimer.Stop();
         _watcher?.Dispose();
+        DisposeFolderBrowser();
         _settings.Save();
         Reader.Dispose();
     }

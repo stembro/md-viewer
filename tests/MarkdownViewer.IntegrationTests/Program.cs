@@ -9,9 +9,11 @@ using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 using MarkdownViewer;
 using Microsoft.Web.WebView2.Wpf;
+using Microsoft.Web.WebView2.Core;
 using ICSharpCode.AvalonEdit;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.AvalonEdit.Document;
+using MarkdownViewer.Browsing;
 
 internal static class IntegrationChecks
 {
@@ -122,6 +124,78 @@ internal static class IntegrationChecks
                 Equal("# Newer external content\n", File.ReadAllText(path), "Conflicting autosave must not overwrite the external file.");
                 Equal(true, editor.Text.Contains("Local unsaved text"), "Conflicting edits must remain in the editor.");
                 Console.WriteLine("PASS  Conflicting edits remain protected.");
+
+                // Discard only this harness's deliberately conflicting draft.
+                typeof(MainWindow).GetField("_isDirty", Private)!.SetValue(editWindow, false);
+                Call(editWindow, "LeaveEditMode");
+                var library = Path.Combine(directory, "library-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(Path.Combine(library, "how-to"));
+                Directory.CreateDirectory(Path.Combine(library, ".git"));
+                var indexPath = Path.Combine(library, "README.md");
+                var nestedPath = Path.Combine(library, "how-to", "nested.md");
+                File.WriteAllText(indexPath, "# Folder index\n");
+                File.WriteAllText(nestedPath, "# Nested document\n");
+                File.WriteAllText(Path.Combine(library, "image.png"), "not a note");
+                await (Task)Call(editWindow, "SetFolderAsync", library, false)!;
+                var root = (FolderNode)Field(editWindow, "_folderRoot")!;
+                Equal("how-to|README.md", string.Join('|', root.Children.Select(n => n.Name)), "Tree must show folders and Markdown, with .git and other files omitted.");
+                var nestedFolder = root.Children.Single(n => n.IsDirectory);
+                Equal(false, nestedFolder.IsLoaded, "Collapsed folders must stay lazy.");
+                var tree = (TreeView)editWindow.FindName("FolderTree");
+                tree.UpdateLayout();
+                nestedFolder.IsExpanded = true;
+                await Until(() => Task.FromResult(nestedFolder.IsLoaded));
+                nestedFolder.Children.Single().IsSelected = true;
+                await Until(async () => await reader.ExecuteScriptAsync("!!document.getElementById('nested-document')") == "true");
+                Equal(nestedPath, Field(editWindow, "_currentPath") as string, "Selecting a tree file must open it.");
+                Call(editWindow, "EnterEditMode");
+                editor.AppendText("\n## Pending tree edit\n");
+                root.Children.Single(n => n.Name == "README.md").IsSelected = true;
+                await Until(async () => await reader.ExecuteScriptAsync("!!document.getElementById('folder-index')") == "true");
+                Equal(true, File.ReadAllText(nestedPath).Contains("Pending tree edit"), "Tree navigation must save pending edits before switching files.");
+                var addedPath = Path.Combine(library, "added.md");
+                var renamedPath = Path.Combine(library, "renamed.md");
+                nestedFolder.IsSelected = true;
+                File.WriteAllText(addedPath, "# Added\n");
+                await Until(() => Task.FromResult(root.Children.Any(n => n.Name == "added.md")));
+                Equal(nestedFolder.FullPath, (tree.SelectedItem as FolderNode)?.FullPath, "Refreshing must retain a folder selection while browsing.");
+                root.Children.Single(n => n.Name == "README.md").IsSelected = true;
+                File.Move(addedPath, renamedPath);
+                await Until(() => Task.FromResult(root.Children.Any(n => n.Name == "renamed.md") && root.Children.All(n => n.Name != "added.md")));
+                File.Delete(renamedPath);
+                await Until(() => Task.FromResult(root.Children.All(n => n.Name != "renamed.md")));
+                Equal(true, nestedFolder.IsExpanded, "Folder refresh must retain expansion.");
+                Equal(indexPath, (tree.SelectedItem as FolderNode)?.FullPath, "Folder refresh must retain the current selection.");
+                Console.WriteLine("PASS  Folder expansion, file selection, safe edit navigation, and live additions/renames.");
+                Call(editWindow, "OutlineTab_Click", editWindow, new RoutedEventArgs());
+                Equal(Visibility.Visible, ((FrameworkElement)editWindow.FindName("OutlinePane")).Visibility, "Outline must remain available.");
+                Call(editWindow, "FilesTab_Click", editWindow, new RoutedEventArgs());
+                await Task.Delay(100);
+                await SnapshotDocument(editWindow, Path.Combine(directory, "folder-tree-dark.png"));
+                settings.GetType().GetProperty("DarkMode")!.SetValue(settings, false);
+                Call(editWindow, "ApplyTheme");
+                await reader.ExecuteScriptAsync("document.documentElement.dataset.theme='light'");
+                await Task.Delay(150);
+                await SnapshotDocument(editWindow, Path.Combine(directory, "folder-tree-light.png"));
+                Equal(library, settings.GetType().GetProperty("LastFolder")!.GetValue(settings) as string, "The folder choice must be remembered.");
+                Console.WriteLine("PASS  Files/Outline tabs and remembered folder preferences.");
+                var reopened = new MainWindow(null);
+                reopened.Show();
+                await Ready(reopened);
+                await Until(() => Task.FromResult((Field(reopened, "_folderRoot") as FolderNode)?.FullPath == library));
+                Equal(indexPath, Field(reopened, "_currentPath") as string, "Reopening must restore the folder and its README index.");
+                Close(reopened);
+                editWindow.Activate();
+                Call(editWindow, "EnterEditMode");
+                editor.AppendText("\nLocal pending tree conflict\n");
+                File.WriteAllText(indexPath, "# External index version\n");
+                await Until(() => Task.FromResult(Field(editWindow, "_externalConflict") is true));
+                nestedFolder.Children.Single().IsSelected = true;
+                await Task.Delay(300);
+                Equal(indexPath, Field(editWindow, "_currentPath") as string, "A tree click must not discard a conflicting draft.");
+                Equal(indexPath, (tree.SelectedItem as FolderNode)?.FullPath, "A blocked navigation must restore the selected file.");
+                Equal(true, editor.Text.Contains("Local pending tree conflict"), "A blocked tree navigation must retain local text.");
+                Console.WriteLine("PASS  Folder restore and blocked navigation with conflicting edits.");
                 Close(editWindow);
                 Close(viewWindow);
                 app.Shutdown(0);
@@ -141,8 +215,38 @@ internal static class IntegrationChecks
     private static object? Field(MainWindow window, string field) => typeof(MainWindow).GetField(field, Private)!.GetValue(window);
     private static void Snapshot(MainWindow window, string path)
     {
-        var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-        bitmap.Render(window);
+        var content = (FrameworkElement)window.Content;
+        var bitmap = new RenderTargetBitmap((int)content.ActualWidth, (int)content.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(content);
+        SaveImage(bitmap, path);
+    }
+    private static async Task SnapshotDocument(MainWindow window, string path)
+    {
+        var reader = (WebView2)window.FindName("Reader");
+        using var stream = new MemoryStream();
+        await reader.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
+        stream.Position = 0;
+        var browser = new BitmapImage();
+        browser.BeginInit();
+        browser.CacheOption = BitmapCacheOption.OnLoad;
+        browser.StreamSource = stream;
+        browser.EndInit();
+        var content = (FrameworkElement)window.Content;
+        var shell = new RenderTargetBitmap((int)content.ActualWidth, (int)content.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        shell.Render(content);
+        var visual = new DrawingVisual();
+        using (var drawing = visual.RenderOpen())
+        {
+            drawing.DrawImage(shell, new Rect(0, 0, content.ActualWidth, content.ActualHeight));
+            var point = reader.TransformToAncestor(content).Transform(new Point());
+            drawing.DrawImage(browser, new Rect(point, new Size(reader.ActualWidth, reader.ActualHeight)));
+        }
+        var bitmap = new RenderTargetBitmap((int)content.ActualWidth, (int)content.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        SaveImage(bitmap, path);
+    }
+    private static void SaveImage(BitmapSource bitmap, string path)
+    {
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream = File.Create(path);

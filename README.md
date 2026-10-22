@@ -5,6 +5,7 @@ A small, native Windows Markdown reader with a quiet, document-first interface. 
 - Rendered Markdown with headings, lists, links, tables, quotes, and code blocks.
 - A native source editor with Markdown syntax highlighting, a formatting toolbar, undo/redo, and automatic saving after a short pause.
 - Document outline, text search, zoom, and light/dark themes.
+- A resizable folder tree with Files/Outline tabs, lazy subfolder loading, and automatic updates when files are added, renamed, or removed.
 - Recent files, drag and drop, and automatic reload when the file changes, including when a second viewer window has the same document open.
 - Relative local images and links to other Markdown documents.
 - Native WPF desktop window with an embedded WebView2 document surface.
@@ -17,21 +18,30 @@ The editor has line numbers, wrapped prose, a visible current line, and explicit
 
 Open documents from a local drive; network shares are not supported. Markdown files can be up to 10 MB. Text is read as UTF-8, with byte order mark detection for UTF-8 and UTF-16 files.
 
+## Browse a folder
+
+Click **Folder** or press **Ctrl+Shift+O**, then choose a folder such as `C:\Dev\notes`. The **Files** tab shows its subfolders and Markdown files; expand a folder with its arrow or the keyboard, and click a file to read it. The **Outline** tab still shows headings in the current document. Drag the divider to resize the sidebar, or use Ctrl+Shift+B to hide it.
+
+The folder choice and sidebar width are remembered. Opening a folder with no document open displays its root `README.md` when one exists. You can also drop a folder onto the window or pass its path on the command line. **More → Browse this file's folder** opens the current document's containing folder in the tree.
+
+The tree lists `.md`, `.markdown`, `.mdown`, and `.mkd` files and omits hidden/system entries, `.git`, and linked directories. Subfolders load when expanded. Additions, renames, and removals update loaded branches automatically; the folder header also has a Refresh button. Right-click a file for **Open in new window**, useful for keeping an editing window and a rendered preview side by side. File switching saves pending edits and keeps the current document open if saving is blocked by a conflict. Closing the folder leaves the current document open.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+O | Open a Markdown file |
+| Ctrl+Shift+O | Open a folder |
 | Ctrl+F | Find in the document |
 | Ctrl+S | Save edits immediately |
 | Enter / Shift+Enter | Next / previous match while searching |
 | F3 / Shift+F3 | Next / previous match |
 | Esc | Close search |
-| Ctrl+B | Bold selected text while editing; show/hide outline while reading |
+| Ctrl+B | Bold selected text while editing; show/hide sidebar while reading |
 | Ctrl+I / Ctrl+K | Italic / insert link while editing |
 | Ctrl+` | Inline code while editing |
 | Ctrl+Z / Ctrl+Y | Undo / redo while editing |
-| Ctrl+Shift+B | Show or hide the outline in either mode |
+| Ctrl+Shift+B | Show or hide the sidebar in either mode |
 | Ctrl++ / Ctrl+- | Zoom in / out |
 | Ctrl+0 | Reset zoom |
 | Alt+Left / Alt+Right | Previous / next document in navigation history |

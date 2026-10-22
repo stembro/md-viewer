@@ -1,6 +1,7 @@
 using MarkdownViewer.Rendering;
 using MarkdownViewer;
 using MarkdownViewer.Editing;
+using MarkdownViewer.Browsing;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -43,7 +44,10 @@ var tests = new (string Name, Action Run)[]
     ("Page updates contain the same safe HTML as navigation", PageUpdates),
     ("Formatting wraps, toggles and selects placeholders", InlineFormatting),
     ("Block formatting respects selected lines and indentation", BlockFormatting),
-    ("Links and code fences retain selected text", InsertFormatting)
+    ("Links and code fences retain selected text", InsertFormatting),
+    ("Folder listing filters files and loads subfolders lazily", FolderBrowsing),
+    ("Folder refresh retains selection and recovers from errors", FolderRefresh),
+    ("Inactive windows preserve newer folder preferences", FolderPreferences)
 };
 
 var failures = 0;
@@ -206,6 +210,91 @@ static string Body(RenderedDocument document)
     var start = document.Html.IndexOf(open, StringComparison.Ordinal) + open.Length;
     var end = document.Html.IndexOf("</main>", start, StringComparison.Ordinal);
     return document.Html[start..end];
+}
+
+static string FolderFixture()
+{
+    var root = Path.Combine(Environment.CurrentDirectory, "artifacts", "folder-tests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(Path.Combine(root, "Alpha"));
+    Directory.CreateDirectory(Path.Combine(root, "z"));
+    Directory.CreateDirectory(Path.Combine(root, ".git"));
+    File.WriteAllText(Path.Combine(root, "Alpha", "nested.md"), "# Nested");
+    foreach (var name in new[] { "A.MD", "b.markdown", "other.mkd", "page.mdown", "plain.txt", "image.png" })
+        File.WriteAllText(Path.Combine(root, name), "example");
+    var hidden = Path.Combine(root, "hidden.md");
+    File.WriteAllText(hidden, "hidden");
+    File.SetAttributes(hidden, FileAttributes.Hidden);
+    return root;
+}
+
+static void FolderBrowsing()
+{
+    var root = FolderFixture();
+    Equal("Alpha|z|A.MD|b.markdown|other.mkd|page.mdown", string.Join('|', FolderListing.Read(root).Select(e => e.Name)));
+    var node = new FolderNode(root, true);
+    Equal(false, node.IsLoaded);
+    Equal(true, node.LoadAsync().GetAwaiter().GetResult());
+    var alpha = node.Children[0];
+    Equal(false, alpha.IsLoaded);
+    Equal(true, alpha.Children.Single().IsPlaceholder);
+    Equal(true, alpha.LoadAsync().GetAwaiter().GetResult());
+    Equal("nested.md", alpha.Children.Single().Name);
+    Equal(true, FolderListing.Contains(root, Path.Combine(root, "Alpha", "nested.md")));
+    Equal(false, FolderListing.Contains(root, root + "-sibling\\other.md"));
+}
+
+static void FolderRefresh()
+{
+    var root = FolderFixture();
+    var node = new FolderNode(root, true);
+    node.LoadAsync().GetAwaiter().GetResult();
+    var alpha = node.Children[0];
+    alpha.LoadAsync().GetAwaiter().GetResult();
+    alpha.IsExpanded = true;
+    var selected = node.Children.Single(n => n.Name == "A.MD");
+    selected.IsSelected = true;
+    File.WriteAllText(Path.Combine(root, "aa.md"), "# Added");
+    node.LoadAsync(refresh: true).GetAwaiter().GetResult();
+    Equal(true, ReferenceEquals(alpha, node.Children[0]));
+    Equal(true, alpha.IsExpanded);
+    Equal(true, ReferenceEquals(selected, node.Children.Single(n => n.Name == "A.MD")));
+    Equal(true, selected.IsSelected);
+    File.Move(Path.Combine(root, "aa.md"), Path.Combine(root, "renamed.md"));
+    node.LoadAsync(refresh: true).GetAwaiter().GetResult();
+    Equal(false, node.Children.Any(n => n.Name == "aa.md"));
+    Equal(true, node.Children.Any(n => n.Name == "renamed.md"));
+    var missing = new FolderNode(Path.Combine(root, "missing"), true);
+    Equal(false, missing.LoadAsync().GetAwaiter().GetResult());
+    Equal(true, missing.Error is not null);
+    Directory.CreateDirectory(missing.FullPath);
+    Equal(true, missing.LoadAsync().GetAwaiter().GetResult());
+    Equal(0, missing.Children.Count);
+}
+
+static void FolderPreferences()
+{
+    var previousProfile = StartupMetrics.ProfileDirectory;
+    StartupMetrics.ProfileDirectory = FolderFixture();
+    try
+    {
+        var first = UserSettings.Load();
+        var second = UserSettings.Load();
+        first.LastFolder = "C:\\Example notes";
+        first.ShowFiles = true;
+        first.SidebarWidth = 340;
+        first.Save();
+        second.Save();
+        var saved = UserSettings.Load();
+        Equal(first.LastFolder, saved.LastFolder);
+        Equal(true, saved.ShowFiles);
+        Equal(340d, saved.SidebarWidth);
+        var third = UserSettings.Load();
+        saved.LastFolder = null;
+        saved.Save();
+        third.Save();
+        Equal<string?>(null, UserSettings.Load().LastFolder);
+    }
+    finally { StartupMetrics.ProfileDirectory = previousProfile; }
 }
 
 static void InlineFormatting()
