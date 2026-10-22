@@ -48,7 +48,8 @@ var tests = new (string Name, Action Run)[]
     ("Folder listing filters files and loads subfolders lazily", FolderBrowsing),
     ("Folder refresh retains selection and recovers from errors", FolderRefresh),
     ("Inactive windows preserve newer navigation preferences", FolderPreferences),
-    ("Legacy sidebar preferences migrate to independent panels", SidebarMigration)
+    ("Legacy sidebar preferences migrate to independent panels", SidebarMigration),
+    ("Workspace sessions preserve tabs and filter missing or invalid paths", WorkspacePersistence)
 };
 
 var failures = 0;
@@ -181,6 +182,10 @@ static void ThemeAndPrint()
     Contains(dark.Html, "data-theme=\"dark\"");
     Contains(dark.Html, "color-scheme: dark");
     Contains(dark.Html, "@media print");
+    var light = MarkdownRenderer.SetPageTheme(dark.Html, false);
+    Contains(light, "<html lang=\"en\" data-theme=\"light\">");
+    Contains(light, ":root[data-theme=\"dark\"]");
+    Equal(dark.Html, MarkdownRenderer.SetPageTheme(light, true));
 }
 
 static void EmptyDocument()
@@ -305,6 +310,34 @@ static void FolderPreferences()
         Equal(false, hidden.ShowOutline);
     }
     finally { StartupMetrics.ProfileDirectory = previousProfile; }
+}
+
+static void WorkspacePersistence()
+{
+    var previous = StartupMetrics.ProfileDirectory;
+    StartupMetrics.ProfileDirectory = FolderFixture();
+    try
+    {
+        var path = Path.Combine(UserSettings.DataDirectory, "saved.md");
+        File.WriteAllText(path, "# Saved");
+        new WorkspaceSession
+        {
+            ActivePath = path,
+            Documents = [new() { Path = path, IsEditing = true, CaretOffset = 17, ReadScroll = 400, EditorScroll = 96 },
+                new() { Path = path.ToUpperInvariant() }, new() { Path = Path.Combine(UserSettings.DataDirectory, "missing.md") },
+                new() { Path = "relative.md" }, new() { Path = @"\\server\notes.md" }]
+        }.Save();
+        var saved = WorkspaceSession.Load();
+        Equal(1, saved.Documents.Count);
+        Equal(path, saved.ActivePath);
+        Equal(true, saved.Documents[0].IsEditing);
+        Equal(17, saved.Documents[0].CaretOffset);
+        Equal(400d, saved.Documents[0].ReadScroll);
+        Equal(96d, saved.Documents[0].EditorScroll);
+        new WorkspaceSession().Save();
+        Equal(0, WorkspaceSession.Load().Documents.Count);
+    }
+    finally { StartupMetrics.ProfileDirectory = previous; }
 }
 
 static void SidebarMigration()

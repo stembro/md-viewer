@@ -4,6 +4,7 @@ A small, native Windows Markdown reader with a quiet, document-first interface. 
 
 - Rendered Markdown with headings, lists, links, tables, quotes, and code blocks.
 - A native source editor with Markdown syntax highlighting, a formatting toolbar, undo/redo, and automatic saving after a short pause.
+- Document tabs with independent Read/Edit modes, cursor/selection, undo history, and scroll positions. Open tabs and their modes restore on startup.
 - Document outline, text search, zoom, and light/dark themes.
 - Independent, resizable Files and Outline panels on either side of the document, with lazy subfolder loading and automatic updates when files are added, renamed, or removed.
 - Recent files, drag and drop, and automatic reload when the file changes, including when a second viewer window has the same document open.
@@ -18,13 +19,23 @@ The editor has line numbers, wrapped prose, a visible current line, and explicit
 
 Open documents from a local drive; network shares are not supported. Markdown files can be up to 10 MB. Text is read as UTF-8, with byte order mark detection for UTF-8 and UTF-16 files.
 
+## Work with tabs
+
+Opening a file from the tree, a link, Recent files, or **Open** creates a tab or activates its existing tab. The file dialog accepts multiple selections, and you can drop several documents onto the window. Files with the same name in different folders have separate tabs; hover over a tab for its full path.
+
+Each document keeps its own Read/Edit mode, reading position, editor cursor and selection, and undo/redo history while the app is open. The Files panel is shared, and Outline follows the selected document. Switching away from an editor saves pending changes immediately when possible. A conflicting or failed save keeps the draft in its original tab, so you can continue using other documents safely. An edit label identifies editor tabs; a dot marks pending changes, and **!** marks an external conflict.
+
+Use **Ctrl+Tab / Ctrl+Shift+Tab** to switch tabs and **Ctrl+W**, the tab's close button, or a middle click to close one. Closing a tab or window checks every affected draft before discarding it. Closing the last tab shows the welcome page.
+
+Normal startup restores the last workspace's open documents, active tab, modes, and positions. Restored tabs load their contents when selected. Saved source files provide the document text; undo history lasts for the current app session. Missing files are skipped during restore. **Open in new window** creates a separate viewer for a second view of a document and leaves the saved workspace intact.
+
 ## Browse a folder
 
 Click **Folder** or press **Ctrl+Shift+O**, then choose a folder such as `C:\Dev\notes`. The **Files** panel on the left shows its subfolders and Markdown files; expand a folder with its arrow or the keyboard, and click a file to read it. The **Outline** panel on the right shows headings in the current document. Both can stay open together. Each has its own toolbar toggle, close button, and draggable divider. Use **Ctrl+Shift+B** for Files and **Ctrl+Shift+L** for Outline in either reading or editing mode.
 
 The folder choice and each panel's visibility and width are remembered. Outline starts hidden in a fresh installation; upgrades preserve the previously visible pane. Panels shrink temporarily in narrower windows to leave space for the document. Opening a folder with no document open displays its root `README.md` when one exists. You can also drop a folder onto the window or pass its path on the command line. **More → Browse this file's folder** opens the current document's containing folder in the tree.
 
-The tree lists `.md`, `.markdown`, `.mdown`, and `.mkd` files and omits hidden/system entries, `.git`, and linked directories. Subfolders load when expanded. Additions, renames, and removals update loaded branches automatically; the folder header also has a Refresh button. Right-click a file for **Open in new window**, useful for keeping an editing window and a rendered preview side by side. File switching saves pending edits and keeps the current document open if saving is blocked by a conflict. Closing the folder leaves the current document open.
+The tree lists `.md`, `.markdown`, `.mdown`, and `.mkd` files and omits hidden/system entries, `.git`, and linked directories. Subfolders load when expanded. Additions, renames, and removals update loaded branches automatically; the folder header also has a Refresh button. Right-click a file for **Open in new window**, useful for keeping an editing window and a rendered preview side by side. File switching keeps conflicting drafts in their own tabs. Closing the folder leaves the open documents intact.
 
 ## Keyboard shortcuts
 
@@ -32,6 +43,8 @@ The tree lists `.md`, `.markdown`, `.mdown`, and `.mkd` files and omits hidden/s
 | --- | --- |
 | Ctrl+O | Open a Markdown file |
 | Ctrl+Shift+O | Open a folder |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous document tab |
+| Ctrl+W | Close the current tab |
 | Ctrl+F | Find in the document |
 | Ctrl+S | Save edits immediately |
 | Enter / Shift+Enter | Next / previous match while searching |

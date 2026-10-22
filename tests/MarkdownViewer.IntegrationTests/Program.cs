@@ -26,6 +26,8 @@ internal static class IntegrationChecks
     {
         var directory = Path.GetFullPath(args[0]);
         Directory.CreateDirectory(directory);
+        var workspacePath = Path.Combine(directory, "profile", "workspace.json");
+        if (File.Exists(workspacePath)) File.Delete(workspacePath);
         typeof(MainWindow).Assembly.GetType("MarkdownViewer.StartupMetrics")!
             .GetProperty("ProfileDirectory", BindingFlags.NonPublic | BindingFlags.Static)!
             .SetValue(null, Path.Combine(directory, "profile"));
@@ -39,7 +41,7 @@ internal static class IntegrationChecks
         app.Resources = (ResourceDictionary)XamlReader.Parse(dictionary.ToString());
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         var editWindow = new MainWindow(path);
-        var viewWindow = new MainWindow(path);
+        var viewWindow = new MainWindow(path, restoreWorkspace: false);
         var started = false;
         editWindow.ContentRendered += async (_, _) =>
         {
@@ -241,7 +243,7 @@ internal static class IntegrationChecks
                 await SnapshotDocument(editWindow, Path.Combine(directory, "folder-tree-light.png"));
                 Equal(library, settings.GetType().GetProperty("LastFolder")!.GetValue(settings) as string, "The folder choice must be remembered.");
                 Console.WriteLine("PASS  Independent panels, editor shortcuts, outline navigation, and remembered widths at narrow/wide sizes.");
-                var reopened = new MainWindow(null);
+                var reopened = new MainWindow(null, restoreWorkspace: false);
                 reopened.Show();
                 await Ready(reopened);
                 await Until(() => Task.FromResult((Field(reopened, "_folderRoot") as FolderNode)?.FullPath == library));
@@ -258,11 +260,18 @@ internal static class IntegrationChecks
                 File.WriteAllText(indexPath, "# External index version\n");
                 await Until(() => Task.FromResult(Field(editWindow, "_externalConflict") is true));
                 nestedFolder.Children.Single().IsSelected = true;
-                await Task.Delay(300);
-                Equal(indexPath, Field(editWindow, "_currentPath") as string, "A tree click must not discard a conflicting draft.");
-                Equal(indexPath, (tree.SelectedItem as FolderNode)?.FullPath, "A blocked navigation must restore the selected file.");
-                Equal(true, editor.Text.Contains("Local pending tree conflict"), "A blocked tree navigation must retain local text.");
-                Console.WriteLine("PASS  Folder restore and blocked navigation with conflicting edits.");
+                await Until(() => Task.FromResult(Field(editWindow, "_currentPath") as string == nestedPath && Field(editWindow, "_switchingDocuments") is false));
+                Equal(true, Field(editWindow, "_isEditing") is true, "The other tab must retain its Edit mode.");
+                root.Children.Single(n => n.Name == "README.md").IsSelected = true;
+                await Until(() => Task.FromResult(Field(editWindow, "_currentPath") as string == indexPath && Field(editWindow, "_switchingDocuments") is false));
+                Equal(true, editor.Text.Contains("Local pending tree conflict"), "A conflicting draft must survive switching tabs.");
+                Equal(true, Field(editWindow, "_externalConflict") is true, "The original tab must retain its conflict protection.");
+                Equal("# External index version\n", File.ReadAllText(indexPath), "Tab switching must not overwrite an external edit.");
+                Console.WriteLine("PASS  Folder restore and conflict drafts survive tab switching.");
+                // Discard only the harness's intentionally conflicting draft.
+                typeof(MainWindow).GetField("_isDirty", Private)!.SetValue(editWindow, false);
+                Call(editWindow, "LeaveEditMode");
+                await CheckTabs(editWindow, directory, workspacePath);
                 Close(editWindow);
                 Close(viewWindow);
                 app.Shutdown(0);
@@ -276,6 +285,118 @@ internal static class IntegrationChecks
             }
         };
         return app.Run(editWindow);
+    }
+
+    private static async Task CheckTabs(MainWindow window, string directory, string workspacePath)
+    {
+        var list = (ListBox)window.FindName("TabList");
+        foreach (var oldTab in list.Items.Cast<object>().ToArray()) await (Task)Call(window, "CloseTabAsync", oldTab)!;
+        Equal(Visibility.Visible, ((FrameworkElement)window.FindName("Welcome")).Visibility, "Closing the last tab must show Welcome.");
+        var firstFolder = Path.Combine(directory, "tabs", "reading");
+        var secondFolder = Path.Combine(directory, "tabs", "editing");
+        Directory.CreateDirectory(firstFolder); Directory.CreateDirectory(secondFolder);
+        var first = Path.Combine(firstFolder, "notes.md");
+        var second = Path.Combine(secondFolder, "notes.md");
+        var firstText = "# Reading tab\n\n[Relative note](relative.md)\n\n" + string.Concat(Enumerable.Repeat("A paragraph for a reading position.\n\n", 80));
+        File.WriteAllText(first, firstText);
+        File.WriteAllText(second, "# Editing tab\n\n" + string.Concat(Enumerable.Repeat("An editable line.\n", 80)));
+        var reader = (WebView2)window.FindName("Reader");
+        await Open(first);
+        await reader.ExecuteScriptAsync("window.scrollTo(0,420)");
+        var scroll = await reader.ExecuteScriptAsync("window.scrollY");
+        await Open(second);
+        Call(window, "EnterEditMode");
+        var editor = (TextEditor)window.FindName("Editor");
+        editor.AppendText("\nA pending edit in its own tab.\n");
+        editor.Select(15, 7);
+        editor.ScrollToVerticalOffset(200);
+        await Task.Delay(100);
+        var editorScroll = editor.VerticalOffset;
+        Equal(true, editorScroll > 100, "The editor fixture must be scrolled before switching tabs.");
+        var buffer = editor.Document;
+        var save = (Task<bool>)Call(window, "SaveEditorAsync", false)!;
+        await Open(first);
+        await save;
+        Equal(false, Field(window, "_isEditing") is true, "The reading tab must stay in Read mode.");
+        Equal(true, File.ReadAllText(second).Contains("A pending edit in its own tab."), "Switching must flush a pending edit to its own file.");
+        Equal(firstText, File.ReadAllText(first), "A save racing a switch must not write to the other document.");
+        Equal(scroll, await reader.ExecuteScriptAsync("window.scrollY"), "Reading position must survive tab switches.");
+        Equal(2, list.Items.Count, "Same-named files in different folders must have separate tabs.");
+        var tab = list.Items[1];
+        list.SelectedItem = tab;
+        await Until(() => Task.FromResult(Field(window, "_currentPath") as string == second && Field(window, "_switchingDocuments") is false));
+        Equal(true, Field(window, "_isEditing") is true, "Selecting a tab must restore its Edit mode.");
+        Equal(true, ReferenceEquals(buffer, editor.Document), "Each tab must retain its editor document and undo stack.");
+        Equal(true, editor.IsKeyboardFocusWithin, "An editor tab must receive typing focus after selection.");
+        Equal(15, editor.SelectionStart, "Editor selection start must survive switching.");
+        Equal(7, editor.SelectionLength, "Editor selection length must survive switching.");
+        Equal(true, Math.Abs(editorScroll - editor.VerticalOffset) < 2, "Editor scroll position must survive switching.");
+        editor.Undo();
+        Equal(false, editor.Text.Contains("A pending edit in its own tab."), "Undo must still reach edits made before switching tabs.");
+        await Open(second.ToUpperInvariant());
+        Equal(2, list.Items.Count, "Reopening a path must activate its existing tab, ignoring path case.");
+        editor.AppendText("\nDraft protected while another tab is active.\n");
+        File.WriteAllText(second, "# Editing tab\n\nExternal content.\n");
+        await Until(() => Task.FromResult(Field(window, "_externalConflict") is true));
+        await Open(first);
+        Equal("!", tab.GetType().GetProperty("Indicator")!.GetValue(tab) as string, "An inactive conflicting draft must remain visibly marked.");
+        await Open(second);
+        Equal(true, editor.Text.Contains("Draft protected while another tab is active."), "Conflict drafts must survive tab switches.");
+        Equal("# Editing tab\n\nExternal content.\n", File.ReadAllText(second), "A conflict draft must not overwrite disk on a tab switch.");
+        // Discard only this generated conflict draft, then reload the disk version.
+        typeof(MainWindow).GetField("_isDirty", Private)!.SetValue(window, false);
+        Call(window, "LeaveEditMode");
+        await (Task)Call(window, "OpenDocumentAsync", second, false, null, false, false, false)!;
+        Call(window, "EnterEditMode");
+        editor.Select(2, 4);
+        await (Task)Call(window, "CaptureActiveTabAsync")!;
+        Call(window, "SaveWorkspace");
+        Equal(true, File.Exists(workspacePath), "The workspace must be persisted.");
+        var restored = new MainWindow(null);
+        restored.Show();
+        await Ready(restored);
+        await Until(() => Task.FromResult(Field(restored, "_currentPath") as string == second && Field(restored, "_switchingDocuments") is false && Field(restored, "_isEditing") is true));
+        var restoredList = (ListBox)restored.FindName("TabList");
+        Equal(2, restoredList.Items.Count, "Startup must restore the open tab set.");
+        Equal<object?>(null, restoredList.Items[0].GetType().GetField("Source")!.GetValue(restoredList.Items[0]), "Inactive restored tabs must remain unloaded.");
+        var restoredEditor = (TextEditor)restored.FindName("Editor");
+        Equal(2, restoredEditor.SelectionStart, "Startup must restore the active editor selection.");
+        Equal(4, restoredEditor.SelectionLength, "Startup must restore the active editor selection length.");
+        await (Task)Call(restored, "OpenDocumentAsync", first, true, null, false, false, false)!;
+        Equal(false, Field(restored, "_isEditing") is true, "Startup must restore the other tab's Read mode.");
+        Equal(scroll, await ((WebView2)restored.FindName("Reader")).ExecuteScriptAsync("window.scrollY"), "Startup must restore the reading position.");
+        restored.Close();
+        await Until(() => Task.FromResult(Field(restored, "_closed") is true));
+        window.Activate();
+        await Open(first);
+        Equal(true, (await reader.ExecuteScriptAsync("document.baseURI")).Contains("/tabs/reading/"), "Switching must update the base directory used for relative links and images.");
+        await Open(Path.Combine(directory, "tabs", "missing.md"));
+        Equal(first, Field(window, "_currentPath") as string, "An invalid file must leave the active tab intact.");
+        Equal(2, list.Items.Count, "An invalid file must not create a tab.");
+        Call(window, "NoticeClose_Click", window, new RoutedEventArgs());
+        await reader.ExecuteScriptAsync("window.scrollTo(0,0)");
+        var settings = Field(window, "_settings")!;
+        foreach (var dark in new[] { true, false })
+        {
+            settings.GetType().GetProperty("DarkMode")!.SetValue(settings, dark);
+            Call(window, "ApplyTheme");
+            await reader.ExecuteScriptAsync($"document.documentElement.dataset.theme='{(dark ? "dark" : "light")}'");
+            Equal(dark ? "\"#202421\"" : "\"#fffefa\"", await reader.ExecuteScriptAsync("getComputedStyle(document.documentElement).getPropertyValue('--paper').trim()"), "Rendered document theme must match the native shell.");
+            await Task.Delay(500);
+            await SnapshotDocument(window, Path.Combine(directory, dark ? "workspace-dark.png" : "workspace-light.png"));
+        }
+        Call(window, "HandleShortcut", Key.Tab, ModifierKeys.Control);
+        await Until(() => Task.FromResult(Field(window, "_currentPath") as string == second && Field(window, "_switchingDocuments") is false));
+        Call(window, "HandleShortcut", Key.Tab, ModifierKeys.Control | ModifierKeys.Shift);
+        await Until(() => Task.FromResult(Field(window, "_currentPath") as string == first && Field(window, "_switchingDocuments") is false));
+        Call(window, "HandleShortcut", Key.W, ModifierKeys.Control);
+        await Until(() => Task.FromResult(list.Items.Count == 1 && Field(window, "_switchingDocuments") is false));
+        await (Task)Call(window, "CloseTabAsync", list.Items[0])!;
+        Equal(Visibility.Visible, ((FrameworkElement)window.FindName("Welcome")).Visibility, "Closing all tabs must restore Welcome.");
+        Equal(false, ((Button)window.FindName("ModeButton")).IsEnabled, "An empty workspace must disable Edit.");
+        Console.WriteLine("PASS  Tab state, undo, selection, scroll, concurrent saving, conflict drafts, lazy session restore, relative paths, shortcuts, and closing all tabs.");
+
+        async Task Open(string file) => await (Task)Call(window, "OpenDocumentAsync", file, true, null, false, false, false)!;
     }
 
     private static object? Call(MainWindow window, string method, params object?[] args) => typeof(MainWindow).GetMethod(method, Private)!.Invoke(window, args);
@@ -328,7 +449,8 @@ internal static class IntegrationChecks
     private static Task Ready(MainWindow window) => Until(async () =>
     {
         var reader = (WebView2)window.FindName("Reader");
-        return reader.CoreWebView2 is not null && await reader.ExecuteScriptAsync("!!document.getElementById('document')") == "true";
+        return reader.CoreWebView2 is not null && Field(window, "_switchingDocuments") is false
+            && await reader.ExecuteScriptAsync("!!document.getElementById('document')") == "true";
     });
     private static async Task Until(Func<Task<bool>> condition)
     {
@@ -341,6 +463,6 @@ internal static class IntegrationChecks
     }
     private static void Equal<T>(T expected, T actual, string message)
     {
-        if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new InvalidOperationException(message);
+        if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new InvalidOperationException($"{message} Expected: {expected}; actual: {actual}.");
     }
 }

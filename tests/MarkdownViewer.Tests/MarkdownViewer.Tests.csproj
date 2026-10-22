@@ -13,6 +13,7 @@
     <Compile Include="../../src/MarkdownViewer/Editing/MarkdownFormatting.cs" Link="MarkdownFormatting.cs" />
     <Compile Include="../../src/MarkdownViewer/Browsing/*.cs" Link="Browsing/%(Filename)%(Extension)" />
     <Compile Include="../../src/MarkdownViewer/UserSettings.cs" Link="UserSettings.cs" />
+    <Compile Include="../../src/MarkdownViewer/WorkspaceSession.cs" Link="WorkspaceSession.cs" />
     <Compile Include="../../src/MarkdownViewer/StartupMetrics.cs" Link="StartupMetrics.cs" />
   </ItemGroup>
 </Project>

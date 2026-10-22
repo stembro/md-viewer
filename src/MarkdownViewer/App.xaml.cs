@@ -18,7 +18,6 @@ public partial class App : Application
         }
         StartupMetrics.Mark("managedStartupMs");
         var paths = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
-        if (paths.Length == 0) new MainWindow(null).Show();
-        else foreach (var path in paths) new MainWindow(path).Show();
+        new MainWindow(paths.FirstOrDefault(), additionalPaths: paths.Skip(1).ToArray()).Show();
     }
 }

@@ -58,10 +58,13 @@ public partial class MainWindow : Window
         [".gif"] = "image/gif", [".webp"] = "image/webp", [".bmp"] = "image/bmp", [".svg"] = "image/svg+xml", [".ico"] = "image/x-icon"
     };
 
-    public MainWindow(string? initialPath)
+    public MainWindow(string? initialPath, bool restoreWorkspace = true, string[]? additionalPaths = null)
     {
         _initialPath = initialPath;
+        _restoreWorkspace = restoreWorkspace;
+        _additionalPaths = additionalPaths ?? [];
         InitializeComponent();
+        TabList.ItemsSource = _tabs;
         ApplyTheme();
         ApplySidebars();
         InitializeFolderBrowser();
@@ -69,8 +72,7 @@ public partial class MainWindow : Window
         _reloadTimer.Tick += async (_, _) =>
         {
             _reloadTimer.Stop();
-            if (_isEditing) await CheckExternalChangeAsync();
-            else if (_currentPath is not null) await OpenDocumentAsync(_currentPath, addHistory: false, preserveScroll: true, skipUnchanged: true);
+            await ReloadActiveDocumentAsync();
         };
         _autoSaveTimer.Tick += async (_, _) =>
         {
@@ -85,11 +87,14 @@ public partial class MainWindow : Window
         StartupMetrics.Mark("windowLoadedMs");
         try
         {
+            await RestoreWorkspaceAsync();
             if (_initialPath is not null && Directory.Exists(_initialPath)) await Task.WhenAll(SetFolderAsync(_initialPath), EnsureReaderAsync());
             else if (_initialPath is not null) await OpenDocumentAsync(_initialPath);
             else await EnsureReaderAsync();
+            foreach (var path in _additionalPaths) await OpenDocumentAsync(path);
             if (_folderRoot is null && _settings.LastFolder is { } folder && StartupMetrics.ReportPath is null)
                 _ = SetFolderAsync(folder, restore: true);
+            SaveWorkspace();
         }
         catch (Exception ex) { ShowNotice("The reading engine could not start. Install or repair Microsoft Edge WebView2 Runtime. " + ex.Message); }
     }
@@ -183,14 +188,15 @@ public partial class MainWindow : Window
 
     private void NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
     {
-        if (e.Uri == _navigationUri) return;
+        if (e.Uri == _navigationUri) { _pageNavigationId = e.NavigationId; return; }
         e.Cancel = true;
         if (e.IsUserInitiated) _ = FollowLinkAsync(e.Uri);
     }
 
     private async void NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
-        if (!e.IsSuccess || _closed) return;
+        if (e.NavigationId != _pageNavigationId || _closed) return;
+        if (!e.IsSuccess) { _pageReady?.TrySetException(new IOException("The document could not be displayed.")); return; }
         _readerHasDocument = true;
         if (_pendingPageDarkMode != _settings.DarkMode)
             await ScriptAsync($"document.documentElement.dataset.theme='{(_settings.DarkMode ? "dark" : "light")}'");
@@ -198,6 +204,7 @@ public partial class MainWindow : Window
         else if (_pendingScroll > 0) await ScriptAsync($"window.scrollTo(0,{_pendingScroll.ToString(CultureInfo.InvariantCulture)})");
         _pendingFragment = null;
         _pendingScroll = 0;
+        _pageReady?.TrySetResult();
         if (StartupMetrics.ReportPath is not null)
         {
             StartupMetrics.Complete();
@@ -236,7 +243,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task OpenDocumentAsync(string path, bool addHistory = true, string? fragment = null, bool preserveScroll = false, bool skipUnchanged = false, bool reusePage = false)
+    private async Task<bool> OpenDocumentCoreAsync(string path, bool addHistory = true, string? fragment = null, bool preserveScroll = false, bool skipUnchanged = false, bool reusePage = false, double? restoreScroll = null)
     {
         var version = ++_openVersion;
         try
@@ -244,11 +251,6 @@ public partial class MainWindow : Window
             path = Path.GetFullPath(path);
             if (path.StartsWith(@"\\", StringComparison.Ordinal)) throw new IOException("Copy this document to a local drive before opening it. Network shares are not supported.");
             if (!MarkdownExtensions.Contains(Path.GetExtension(path))) throw new IOException("Choose a .md, .markdown, .mdown, or .mkd file.");
-            if (_isEditing && !string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase))
-            {
-                if (!await SaveEditorAsync()) return;
-                LeaveEditMode();
-            }
             var info = new FileInfo(path);
             if (!info.Exists) throw new FileNotFoundException("The file no longer exists or could not be found.");
             if (info.Length > 10 * 1024 * 1024) throw new IOException("This file is larger than the 10 MB reading limit.");
@@ -260,7 +262,8 @@ public partial class MainWindow : Window
             var cachedMarkdown = _renderedMarkdown;
             var cachedDocument = _renderedDocument;
             var darkMode = _settings.DarkMode;
-            var canUpdatePage = samePath && _readerHasDocument;
+            var canUpdatePage = _readerHasDocument;
+            var sameReader = string.Equals(_readerPath, path, StringComparison.OrdinalIgnoreCase);
             // File decoding, parsing, HTML encoding and browser startup run concurrently.
             var prepare = Task.Run(async () =>
             {
@@ -273,9 +276,8 @@ public partial class MainWindow : Window
                 StartupMetrics.Mark("markdownRenderedMs");
                 var directory = Path.GetDirectoryName(path)!;
                 var directoryUri = new Uri(directory + Path.DirectorySeparatorChar).AbsoluteUri.Replace("file:///", MarkdownRenderer.LocalOrigin, StringComparison.Ordinal);
-                var html = rendered.Html
-                    .Replace($"<base href=\"{MarkdownRenderer.LocalOrigin}\">", $"<base href=\"{WebUtility.HtmlEncode(directoryUri)}\">", StringComparison.Ordinal)
-                    .Replace(darkMode ? "data-theme=\"light\"" : "data-theme=\"dark\"", darkMode ? "data-theme=\"dark\"" : "data-theme=\"light\"", StringComparison.Ordinal);
+                var html = MarkdownRenderer.SetPageTheme(rendered.Html, darkMode)
+                    .Replace($"<base href=\"{MarkdownRenderer.LocalOrigin}\">", $"<base href=\"{WebUtility.HtmlEncode(directoryUri)}\">", StringComparison.Ordinal);
                 string? updateScript = null;
                 if (canUpdatePage && rendered.BodyHtml.Length <= 512 * 1024)
                 {
@@ -284,7 +286,8 @@ public partial class MainWindow : Window
                         (() => {
                           const main = document.getElementById('document');
                           if (!main) return false;
-                          const y = {{(preserveScroll ? "window.scrollY" : "0")}};
+                          const y = {{(restoreScroll?.ToString(CultureInfo.InvariantCulture) ?? (preserveScroll && sameReader ? "window.scrollY" : "0"))}};
+                          document.querySelector('base').href = {{JsonSerializer.Serialize(directoryUri)}};
                           main.innerHTML = {{JsonSerializer.Serialize(rendered.BodyHtml)}};
                           document.documentElement.dataset.theme = '{{(darkMode ? "dark" : "light")}}';
                           const id = {{JsonSerializer.Serialize(fragment)}};
@@ -295,18 +298,18 @@ public partial class MainWindow : Window
                         """;
                 }
                 return new PreparedDocument(source, rendered, Encoding.UTF8.GetBytes(html), updateScript,
-                    reusePage && canUpdatePage && ReferenceEquals(cachedDocument, rendered));
+                    reusePage && sameReader && canUpdatePage && ReferenceEquals(cachedDocument, rendered));
             });
             var initialize = EnsureReaderAsync();
             await Task.WhenAll(prepare, initialize);
-            if (version != _openVersion || _closed) return;
+            if (version != _openVersion || _closed) return false;
             var prepared = await prepare;
             var sourceFile = prepared.Source;
             var rendered = prepared.Rendered;
             if (rendered is null)
             {
                 _sourceFile = sourceFile;
-                return;
+                return true;
             }
             _documentBytes = prepared.Bytes;
             _currentPath = path;
@@ -317,24 +320,28 @@ public partial class MainWindow : Window
             _isDirty = false;
             _externalConflict = false;
             var updatedPage = prepared.ReusePage || (prepared.UpdateScript is not null && await ScriptAsync(prepared.UpdateScript) == "true");
-            if (version != _openVersion || _closed) return;
+            if (version != _openVersion || _closed) return false;
             if (!updatedPage)
             {
                 double scroll = 0;
                 if (preserveScroll && samePath) double.TryParse(await ScriptAsync("window.scrollY"), CultureInfo.InvariantCulture, out scroll);
-                if (version != _openVersion || _closed) return;
+                if (version != _openVersion || _closed) return false;
                 _pendingFragment = fragment;
-                _pendingScroll = scroll;
+                _pendingScroll = restoreScroll ?? scroll;
                 _readerHasDocument = false;
                 _pendingPageDarkMode = darkMode;
                 _navigationUri = $"{MarkdownRenderer.LocalOrigin}__viewer_document__.html?v={version}";
+                _pageReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 Reader.CoreWebView2.Navigate(_navigationUri);
+                await _pageReady.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                if (version != _openVersion || _closed) return false;
             }
             else if (darkMode != _settings.DarkMode)
                 await ScriptAsync($"document.documentElement.dataset.theme='{(_settings.DarkMode ? "dark" : "light")}'");
             Reader.Visibility = Visibility.Visible;
             Welcome.Visibility = Visibility.Collapsed;
             DocumentName.Text = Path.GetFileName(path);
+            _readerPath = path;
             Title = $"{Path.GetFileName(path)} — Markdown Viewer";
             StatusText.Text = path;
             StatusText.ToolTip = path;
@@ -360,14 +367,16 @@ public partial class MainWindow : Window
             }
             WatchFile(path);
             _ = RevealCurrentDocumentAsync();
+            return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or InvalidOperationException or COMException or WebView2RuntimeNotFoundException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or InvalidOperationException or COMException or WebView2RuntimeNotFoundException or TimeoutException)
         {
             if (version == _openVersion)
             {
                 if (_currentPath is null) { Reader.Visibility = Visibility.Collapsed; Welcome.Visibility = Visibility.Visible; }
                 ShowNotice($"Could not open “{Path.GetFileName(path)}”. {ex.Message}");
             }
+            return false;
         }
         finally
         {
@@ -390,6 +399,7 @@ public partial class MainWindow : Window
 
     private void Mode_Click(object sender, RoutedEventArgs e)
     {
+        if (_switchingDocuments || _closingWorkspace) return;
         if (_isEditing) _ = ReturnToReadingModeAsync();
         else EnterEditMode();
     }
@@ -410,11 +420,20 @@ public partial class MainWindow : Window
             return;
         }
 
+        _ = CaptureActiveTabAsync();
         _isEditing = true;
         _externalConflict = false;
-        _isLoadingEditor = true;
-        Editor.Text = _currentMarkdown;
-        _isLoadingEditor = false;
+        if (_activeTab is not { } tab) return;
+        if (tab.EditorDocument is not null && !MarkdownTextFile.ContentEquals(tab.EditorDocument.Text, _currentMarkdown)) tab.EditorDocument = null;
+        BindTabEditor(tab);
+        ShowEditor();
+        UpdateTabStatus();
+        SaveWorkspace();
+    }
+
+    private void ShowEditor()
+    {
+        ModeButton.IsEnabled = true;
         EditorPanel.Visibility = Visibility.Visible;
         Reader.Visibility = Visibility.Collapsed;
         Welcome.Visibility = Visibility.Collapsed;
@@ -424,29 +443,48 @@ public partial class MainWindow : Window
         SaveButton.IsEnabled = true;
         OutlineList.IsEnabled = false;
         DocumentName.Text = Path.GetFileName(_currentPath) + " · Editing";
+        Title = $"{Path.GetFileName(_currentPath)} — Markdown Viewer";
         DocumentStats.Text = "Markdown source   ·   Auto-saves after a short pause";
-        StatusText.Text = "Editing · changes save automatically while you type";
+        StatusText.Text = _externalConflict ? "The file changed elsewhere · your draft is kept in this tab" : _isDirty ? "Unsaved changes · saving shortly…" : "Editing · changes save automatically while you type";
         StatusText.ToolTip = _currentPath;
         FindResult.Text = "";
         FindBar.Visibility = Visibility.Collapsed;
-        Editor.Focus();
-        Editor.CaretOffset = 0;
+        FocusActiveDocument();
+        if (_externalConflict) ShowExternalConflict("This file changed elsewhere. Your edits are still here.");
     }
 
     private async Task ReturnToReadingModeAsync()
     {
-        if (_currentPath is null || !await SaveEditorAsync()) return;
-        var path = _currentPath;
-        LeaveEditMode();
-        await OpenDocumentAsync(path, addHistory: false, preserveScroll: true, reusePage: true);
+        await _documentGate.WaitAsync();
+        try
+        {
+            if (_currentPath is null || !await SaveEditorAsync()) return;
+            var path = _currentPath;
+            LeaveEditMode();
+            if (!await OpenDocumentCoreAsync(path, addHistory: false, preserveScroll: true, reusePage: true, restoreScroll: _activeTab?.Position.ReadScroll))
+            {
+                _isEditing = true;
+                ShowEditor();
+            }
+            UpdateTabStatus(); SaveWorkspace();
+        }
+        finally { _documentGate.Release(); }
     }
 
     private void LeaveEditMode()
     {
+        CaptureActiveMetadata();
         _autoSaveTimer.Stop();
         _isEditing = false;
         _isDirty = false;
         _externalConflict = false;
+        ShowReader();
+        UpdateTabStatus();
+        SaveWorkspace();
+    }
+
+    private void ShowReader()
+    {
         EditorPanel.Visibility = Visibility.Collapsed;
         Reader.Visibility = Visibility.Visible;
         ModeButton.Content = "Edit";
@@ -469,6 +507,7 @@ public partial class MainWindow : Window
         // Text materializes the entire buffer. Inspect it once at save time,
         // rather than copying and normalizing a large document on every keystroke.
         _isDirty = true;
+        UpdateTabStatus();
         if (_externalConflict)
         {
             StatusText.Text = "The file changed elsewhere · review before saving";
@@ -480,6 +519,15 @@ public partial class MainWindow : Window
     }
 
     private async Task<bool> SaveEditorAsync(bool force = false)
+    {
+        if (_savingTask is not null) await _savingTask;
+        var task = SaveEditorCoreAsync(force);
+        _savingTask = task;
+        try { return await task; }
+        finally { if (ReferenceEquals(_savingTask, task)) _savingTask = null; UpdateTabStatus(); }
+    }
+
+    private async Task<bool> SaveEditorCoreAsync(bool force = false)
     {
         if (!_isEditing || !_isDirty) return true;
         if (_isSaving || _sourceFile is null || _currentPath is null) return false;
@@ -608,6 +656,7 @@ public partial class MainWindow : Window
 
     private void ShowExternalConflict(string message)
     {
+        UpdateTabStatus();
         NoticeText.Text = message + " Press Ctrl+S to review and explicitly save over it.";
         Notice.Visibility = Visibility.Visible;
         StatusText.Text = "The file changed elsewhere · your edits are kept here";
@@ -653,21 +702,29 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void SaveButton_Click(object sender, RoutedEventArgs e) => await SaveEditorAsync(force: true);
+    private async void SaveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_switchingDocuments && !_closingWorkspace) await SaveEditorAsync(force: true);
+    }
 
     private void WatchFile(string path)
     {
-        if (_watcher is not null && string.Equals(Path.Combine(_watcher.Path, _watcher.Filter), path, StringComparison.OrdinalIgnoreCase)) return;
-        _watcher?.Dispose();
+        if (_activeTab is not { } tab) return;
+        if (tab.Watcher is not null) { _watcher = tab.Watcher; return; }
         _watcher = null;
         try
         {
             _watcher = new FileSystemWatcher(Path.GetDirectoryName(path)!, Path.GetFileName(path))
             { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName };
-            _watcher.Changed += FileChanged;
-            _watcher.Created += FileChanged;
-            _watcher.Deleted += FileChanged;
-            _watcher.Renamed += FileChanged;
+            tab.Watcher = _watcher;
+            void Changed(object sender, FileSystemEventArgs e) => Dispatcher.BeginInvoke(() =>
+            {
+                if (!_closed && ReferenceEquals(tab, _activeTab)) FileChanged(sender, e);
+            });
+            _watcher.Changed += Changed;
+            _watcher.Created += Changed;
+            _watcher.Deleted += Changed;
+            _watcher.Renamed += Changed;
             _watcher.EnableRaisingEvents = true;
         }
         catch (IOException) { DocumentStats.Text = DocumentStats.Text.Replace("Auto-reload on", "F5 to reload"); }
@@ -693,9 +750,9 @@ public partial class MainWindow : Window
     private async void Open_Click(object sender, RoutedEventArgs e) => await ChooseFileAsync();
     private async Task ChooseFileAsync()
     {
-        var dialog = new OpenFileDialog { Title = "Open Markdown", Filter = "Markdown documents|*.md;*.markdown;*.mdown;*.mkd|All files|*.*", CheckFileExists = true };
+        var dialog = new OpenFileDialog { Title = "Open Markdown", Filter = "Markdown documents|*.md;*.markdown;*.mdown;*.mkd|All files|*.*", CheckFileExists = true, Multiselect = true };
         if (_currentPath is not null) dialog.InitialDirectory = Path.GetDirectoryName(_currentPath);
-        if (dialog.ShowDialog(this) == true) await OpenDocumentAsync(dialog.FileName);
+        if (dialog.ShowDialog(this) == true) foreach (var path in dialog.FileNames) await OpenDocumentAsync(path);
     }
 
     private void Recent_Click(object sender, RoutedEventArgs e)
@@ -754,10 +811,8 @@ public partial class MainWindow : Window
         if (target < 0 || target >= _history.Count) return;
         var prior = _historyIndex;
         var targetPath = _history[target];
-        var expectedVersion = _openVersion + 1;
         _historyIndex = target;
         await OpenDocumentAsync(targetPath, false);
-        if (_openVersion != expectedVersion) return;
         if (!string.Equals(_currentPath, targetPath, StringComparison.OrdinalIgnoreCase)) _historyIndex = prior;
         UpdateHistoryButtons();
     }
@@ -845,13 +900,14 @@ public partial class MainWindow : Window
     {
         if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files)
         {
-            if (Directory.Exists(files[0])) await SetFolderAsync(files[0]);
-            else await OpenDocumentAsync(files[0]);
+            foreach (var path in files)
+                if (Directory.Exists(path)) await SetFolderAsync(path);
+                else await OpenDocumentAsync(path);
         }
         e.Handled = true;
     }
     private static bool IsAppShortcut(Key key, ModifierKeys modifiers) =>
-        (modifiers.HasFlag(ModifierKeys.Control) && key is Key.O or Key.F or Key.B or Key.P or Key.S or Key.Add or Key.OemPlus or Key.Subtract or Key.OemMinus or Key.D0 or Key.NumPad0)
+        (modifiers.HasFlag(ModifierKeys.Control) && key is Key.O or Key.F or Key.B or Key.P or Key.S or Key.W or Key.Tab or Key.Add or Key.OemPlus or Key.Subtract or Key.OemMinus or Key.D0 or Key.NumPad0)
         || (modifiers.HasFlag(ModifierKeys.Control) && modifiers.HasFlag(ModifierKeys.Shift) && key == Key.L)
         || (modifiers.HasFlag(ModifierKeys.Alt) && key is Key.Left or Key.Right)
         || key is Key.F5 or Key.F3 or Key.Escape;
@@ -876,7 +932,15 @@ public partial class MainWindow : Window
                 case Key.B: Files_Click(this, new RoutedEventArgs()); break;
                 case Key.L: Outline_Click(this, new RoutedEventArgs()); break;
                 case Key.P: Print(); break;
-                case Key.S: if (_isEditing) await SaveEditorAsync(force: true); break;
+                case Key.S: if (_isEditing && !_switchingDocuments && !_closingWorkspace) await SaveEditorAsync(force: true); break;
+                case Key.W: if (_activeTab is not null) await CloseTabAsync(_activeTab); break;
+                case Key.Tab:
+                    if (_tabs.Count > 1)
+                    {
+                        var index = (_tabs.IndexOf(_activeTab!) + (modifiers.HasFlag(ModifierKeys.Shift) ? -1 : 1) + _tabs.Count) % _tabs.Count;
+                        await OpenDocumentAsync(_tabs[index].Path, false);
+                    }
+                    break;
                 case Key.Add: case Key.OemPlus: SetZoom(_settings.Zoom + .1); break;
                 case Key.Subtract: case Key.OemMinus: SetZoom(_settings.Zoom - .1); break;
                 case Key.D0: case Key.NumPad0: SetZoom(1); break;
@@ -893,23 +957,26 @@ public partial class MainWindow : Window
     }
     private async void Window_Closing(object? sender, CancelEventArgs e)
     {
-        if (_isEditing && _isDirty && !_allowClose)
+        if (!_allowClose && StartupMetrics.ReportPath is null)
         {
-            var answer = MessageBox.Show(this,
-                "Save your Markdown changes before closing?",
-                "Unsaved Markdown changes", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
-            if (answer == MessageBoxResult.Cancel) { e.Cancel = true; return; }
             e.Cancel = true;
-            if (answer == MessageBoxResult.Yes && !await SaveEditorAsync(force: true)) return;
-            _allowClose = true;
-            Close();
+            if (_closingWorkspace) return;
+            _closingWorkspace = true;
+            DocumentSurface.IsEnabled = false;
+            try
+            {
+                if (!await PrepareWorkspaceCloseAsync()) return;
+                _allowClose = true;
+                Close();
+            }
+            finally { _closingWorkspace = false; DocumentSurface.IsEnabled = true; }
             return;
         }
         _closed = true;
         _openVersion++;
         _reloadTimer.Stop();
         _autoSaveTimer.Stop();
-        _watcher?.Dispose();
+        foreach (var tab in _tabs) tab.Watcher?.Dispose();
         DisposeFolderBrowser();
         _settings.Save();
         Reader.Dispose();

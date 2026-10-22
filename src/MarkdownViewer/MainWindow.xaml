@@ -7,6 +7,19 @@
  WindowStartupLocation="CenterScreen" AllowDrop="True" PreviewDrop="Window_Drop" PreviewDragOver="Window_DragOver"
  PreviewKeyDown="Window_PreviewKeyDown" Loaded="Window_Loaded" Closing="Window_Closing">
  <Window.Resources>
+  <Style x:Key="DocumentTabStyle" TargetType="ListBoxItem">
+   <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
+   <Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="0"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
+    <Border x:Name="TabPlate" Background="Transparent" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+     <Grid><Border x:Name="ActiveLine" Height="2" Background="Transparent" VerticalAlignment="Top"/><ContentPresenter Margin="0,2,0,0"/></Grid>
+    </Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="TabPlate" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
+     <Trigger Property="IsSelected" Value="True"><Setter TargetName="TabPlate" Property="Background" Value="{DynamicResource Surface}"/><Setter TargetName="ActiveLine" Property="Background" Value="{DynamicResource Accent}"/><Setter Property="Foreground" Value="{DynamicResource Ink}"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <PathGeometry x:Key="FolderGlyph" Figures="M1,4 V2 H6 L8,4 H15 V13 H1 Z"/>
   <PathGeometry x:Key="MarkdownFileGlyph" Figures="M3,1 H9 L13,5 V15 H3 Z M9,1 V5 H13"/>
   <Style x:Key="FolderTreeItemStyle" TargetType="TreeViewItem">
@@ -160,6 +173,23 @@
      </Grid>
    </Border>
    <Grid Grid.Column="2" Background="{DynamicResource Surface}">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <Border x:Name="TabBar" Visibility="Collapsed" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+     <ListBox x:Name="TabList" Background="Transparent" BorderThickness="0" Padding="0" MinHeight="42" MaxHeight="62" ItemContainerStyle="{StaticResource DocumentTabStyle}" SelectionChanged="TabList_SelectionChanged" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Disabled" AutomationProperties.Name="Open documents">
+      <ListBox.Template><ControlTemplate TargetType="ListBox"><ScrollViewer CanContentScroll="True" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Focusable="False"><ItemsPresenter/></ScrollViewer></ControlTemplate></ListBox.Template>
+      <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ListBox.ItemsPanel>
+      <ListBox.ItemTemplate><DataTemplate>
+       <Grid MinWidth="110" MaxWidth="230" Height="40" Margin="12,0,4,0" ToolTip="{Binding Description}" PreviewMouseDown="Tab_MouseDown">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontSize="12" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="1" Text="{Binding Mode}" FontSize="10" Foreground="{DynamicResource Muted}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="2" Text="{Binding Indicator}" Foreground="{DynamicResource Accent}" Margin="7,0,0,0" VerticalAlignment="Center"/>
+        <Button Grid.Column="3" Style="{StaticResource IconButton}" Width="26" Height="28" FontSize="10" Content="&#xE711;" Margin="6,0,0,0" Click="CloseTab_Click" ToolTip="Close tab (Ctrl+W)" AutomationProperties.Name="Close document tab"/>
+       </Grid>
+      </DataTemplate></ListBox.ItemTemplate>
+     </ListBox>
+    </Border>
+    <Grid x:Name="DocumentSurface" Grid.Row="1">
     <wv:WebView2 x:Name="Reader" Visibility="Collapsed" DefaultBackgroundColor="White" AllowDrop="False" AllowExternalDrop="True"/>
     <Border x:Name="EditorPanel" Visibility="Collapsed" Background="{DynamicResource Surface}">
      <Grid>
@@ -230,6 +260,7 @@
       <StackPanel Orientation="Horizontal"><Button Content="Open a Markdown file" Background="{DynamicResource Hover}" Foreground="{DynamicResource Accent}" FontWeight="SemiBold" Padding="18,12" Margin="0" Click="Open_Click"/><TextBlock Text="Ctrl + O" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="16,0,0,0" FontSize="12"/></StackPanel>
       <TextBlock Text="Or drop a .md file anywhere in this window" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,20,0,0"/>
      </StackPanel>
+    </Grid>
     </Grid>
    </Grid>
   </Grid>

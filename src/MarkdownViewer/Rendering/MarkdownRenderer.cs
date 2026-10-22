@@ -38,6 +38,10 @@ public static partial class MarkdownRenderer
     [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9+.-]*:")]
     private static partial Regex Scheme();
 
+    internal static string SetPageTheme(string html, bool darkMode) => html.Replace(
+        $"<html lang=\"en\" data-theme=\"{(darkMode ? "light" : "dark")}\">",
+        $"<html lang=\"en\" data-theme=\"{(darkMode ? "dark" : "light")}\">", StringComparison.Ordinal);
+
     public static RenderedDocument Render(string markdown, bool darkMode = false)
     {
         ArgumentNullException.ThrowIfNull(markdown);

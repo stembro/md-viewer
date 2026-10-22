@@ -132,8 +132,8 @@ public partial class MainWindow
         var path = _currentPath;
         var version = _folderVersion;
         var documentVersion = _openVersion;
-        if (root is null || path is null) return;
-        if (!FolderListing.Contains(root.FullPath, path))
+        if (root is null) return;
+        if (path is null || !FolderListing.Contains(root.FullPath, path))
         {
             _suppressFolderNavigation = true;
             try { if (FolderTree.SelectedItem is FolderNode selected) selected.IsSelected = false; }
@@ -287,7 +287,7 @@ public partial class MainWindow
         else
         {
             Item("Open", () => _ = OpenDocumentAsync(node.FullPath));
-            Item("Open in new window", () => new MainWindow(node.FullPath).Show());
+            Item("Open in new window", () => new MainWindow(node.FullPath, restoreWorkspace: false).Show());
         }
         Item("Show in File Explorer", () =>
         {
