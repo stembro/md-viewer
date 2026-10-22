@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Threading;
 using MarkdownViewer.Browsing;
@@ -81,8 +80,8 @@ public partial class MainWindow
             FolderNameText.ToolTip = path;
             RefreshFolderButton.IsEnabled = CloseFolderButton.IsEnabled = true;
             _settings.LastFolder = path;
-            if (!restore) { _settings.ShowFiles = true; _settings.ShowOutline = true; }
-            ApplyOutline();
+            if (!restore) _settings.ShowFiles = true;
+            ApplySidebars();
             UpdateFolderEmpty();
             _settings.Save();
             WatchFolder(root, version);
@@ -102,24 +101,6 @@ public partial class MainWindow
                 ShowNotice($"Could not open folder “{Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar))}”. {ex.Message}");
             }
         }
-    }
-
-    private void FilesTab_Click(object sender, RoutedEventArgs e) { _settings.ShowFiles = true; ApplySidebarTabs(); }
-    private void OutlineTab_Click(object sender, RoutedEventArgs e) { _settings.ShowFiles = false; ApplySidebarTabs(); }
-
-    private void ApplySidebarTabs()
-    {
-        FolderPane.Visibility = _settings.ShowFiles ? Visibility.Visible : Visibility.Collapsed;
-        OutlinePane.Visibility = _settings.ShowFiles ? Visibility.Collapsed : Visibility.Visible;
-        FilesTab.Background = (Brush)Resources[_settings.ShowFiles ? "Hover" : "Panel"];
-        FilesTab.Foreground = (Brush)Resources[_settings.ShowFiles ? "Accent" : "Muted"];
-        OutlineTab.Background = (Brush)Resources[_settings.ShowFiles ? "Panel" : "Hover"];
-        OutlineTab.Foreground = (Brush)Resources[_settings.ShowFiles ? "Muted" : "Accent"];
-    }
-
-    private void SidebarSplitter_DragCompleted(object sender, DragCompletedEventArgs e)
-    {
-        if (_settings.ShowOutline) _settings.SidebarWidth = Math.Clamp(SidebarColumn.ActualWidth, 200, 480);
     }
 
     private async void FolderTree_Expanded(object sender, RoutedEventArgs e)

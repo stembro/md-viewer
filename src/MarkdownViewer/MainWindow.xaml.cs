@@ -63,7 +63,7 @@ public partial class MainWindow : Window
         _initialPath = initialPath;
         InitializeComponent();
         ApplyTheme();
-        ApplyOutline();
+        ApplySidebars();
         InitializeFolderBrowser();
         UpdateZoom();
         _reloadTimer.Tick += async (_, _) =>
@@ -763,15 +763,6 @@ public partial class MainWindow : Window
     }
     private void UpdateHistoryButtons() { BackButton.IsEnabled = _historyIndex > 0; ForwardButton.IsEnabled = _historyIndex >= 0 && _historyIndex < _history.Count - 1; }
     private async void Outline_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (OutlineList.SelectedItem is OutlineItem item && !_isEditing) await ScrollToAsync(item.Id); }
-    private void Outline_Click(object sender, RoutedEventArgs e) { _settings.ShowOutline = !_settings.ShowOutline; ApplyOutline(); }
-    private void ApplyOutline()
-    {
-        SidebarColumn.MinWidth = _settings.ShowOutline ? 200 : 0;
-        SidebarColumn.Width = new GridLength(_settings.ShowOutline ? _settings.SidebarWidth : 0);
-        SidebarSplitterColumn.Width = new GridLength(_settings.ShowOutline ? 4 : 0);
-        Sidebar.Visibility = SidebarSplitter.Visibility = _settings.ShowOutline ? Visibility.Visible : Visibility.Collapsed;
-        ApplySidebarTabs();
-    }
     private void Find_Click(object sender, RoutedEventArgs e) => ShowFind();
     private void ShowFind() { FindBar.Visibility = Visibility.Visible; FindBox.Focus(); FindBox.SelectAll(); }
     private void FindClose_Click(object sender, RoutedEventArgs e) => CloseFind();
@@ -830,7 +821,7 @@ public partial class MainWindow : Window
         ThemeButton.Content = _settings.DarkMode ? "\uE706" : "\uE708";
         ThemeButton.ToolTip = _settings.DarkMode ? "Switch to light theme" : "Switch to dark theme";
         if (_editor is not null) ApplyEditorTheme(_editor);
-        ApplySidebarTabs();
+        UpdateSidebarButtons();
         ApplyTitleBarTheme();
     }
     private void ApplyTitleBarTheme()
@@ -861,6 +852,7 @@ public partial class MainWindow : Window
     }
     private static bool IsAppShortcut(Key key, ModifierKeys modifiers) =>
         (modifiers.HasFlag(ModifierKeys.Control) && key is Key.O or Key.F or Key.B or Key.P or Key.S or Key.Add or Key.OemPlus or Key.Subtract or Key.OemMinus or Key.D0 or Key.NumPad0)
+        || (modifiers.HasFlag(ModifierKeys.Control) && modifiers.HasFlag(ModifierKeys.Shift) && key == Key.L)
         || (modifiers.HasFlag(ModifierKeys.Alt) && key is Key.Left or Key.Right)
         || key is Key.F5 or Key.F3 or Key.Escape;
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -881,7 +873,8 @@ public partial class MainWindow : Window
             {
                 case Key.O: if (modifiers.HasFlag(ModifierKeys.Shift)) await ChooseFolderAsync(); else await ChooseFileAsync(); break;
                 case Key.F: ShowFind(); break;
-                case Key.B: Outline_Click(this, new RoutedEventArgs()); break;
+                case Key.B: Files_Click(this, new RoutedEventArgs()); break;
+                case Key.L: Outline_Click(this, new RoutedEventArgs()); break;
                 case Key.P: Print(); break;
                 case Key.S: if (_isEditing) await SaveEditorAsync(force: true); break;
                 case Key.Add: case Key.OemPlus: SetZoom(_settings.Zoom + .1); break;

@@ -65,7 +65,7 @@
   <GeometryDrawing Brush="#376A54" Geometry="M 4,0 L 28,0 Q 32,0 32,4 L 32,28 Q 32,32 28,32 L 4,32 Q 0,32 0,28 L 0,4 Q 0,0 4,0"/>
   <GeometryDrawing Brush="White" Geometry="M 6,10 L 9,10 13,15 17,10 20,10 20,23 17,23 17,15 13,20 9,15 9,23 6,23 Z M 23,10 L 26,10 26,18 29,18 24.5,23 20,18 23,18 Z"/>
  </DrawingGroup></DrawingImage.Drawing></DrawingImage></Window.Icon>
- <Grid>
+ <Grid x:Name="WindowLayout" SizeChanged="WindowLayout_SizeChanged">
   <Grid.RowDefinitions><RowDefinition Height="60"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="30"/></Grid.RowDefinitions>
   <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="12,0">
    <DockPanel LastChildFill="True">
@@ -77,7 +77,7 @@
      <Button x:Name="RecentButton" Style="{StaticResource IconButton}" Width="26" Content="&#xE70D;" ToolTip="Recent files" AutomationProperties.Name="Recent files" Click="Recent_Click"/>
      <Button x:Name="FolderButton" Click="ChooseFolder_Click" ToolTip="Open folder (Ctrl+Shift+O)"><StackPanel Orientation="Horizontal"><Path Data="{StaticResource FolderGlyph}" Width="14" Height="12" Stretch="Uniform" Stroke="{DynamicResource Ink}" StrokeThickness="1.2" Margin="0,0,8,0" VerticalAlignment="Center"/><TextBlock Text="Folder"/></StackPanel></Button>
      <Border Width="1" Height="22" Background="{DynamicResource Line}" Margin="9,0"/>
-     <Button Style="{StaticResource IconButton}" Content="&#xE8FD;" ToolTip="Toggle sidebar (Ctrl+Shift+B)" AutomationProperties.Name="Toggle sidebar" Click="Outline_Click"/>
+     <Button x:Name="FilesToggleButton" Style="{StaticResource IconButton}" ToolTip="Show files (Ctrl+Shift+B)" AutomationProperties.Name="Toggle files panel" Click="Files_Click"><Path Data="M1,1 H15 V13 H1 Z M6,1 V13" Width="16" Height="14" Stretch="Uniform" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2"/></Button>
     </StackPanel>
     <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
      <Button x:Name="ModeButton" Content="Edit" ToolTip="Edit this Markdown document" AutomationProperties.Name="Edit document" Click="Mode_Click" IsEnabled="False"/>
@@ -88,6 +88,7 @@
      <Button Style="{StaticResource IconButton}" Content="&#xE738;" ToolTip="Zoom out (Ctrl+-)" AutomationProperties.Name="Zoom out" Click="ZoomOut_Click"/>
      <Button x:Name="ZoomButton" Content="100%" Width="55" Padding="2,8" ToolTip="Reset zoom (Ctrl+0)" Click="ZoomReset_Click"/>
      <Button Style="{StaticResource IconButton}" Content="&#xE710;" ToolTip="Zoom in (Ctrl++)" AutomationProperties.Name="Zoom in" Click="ZoomIn_Click"/>
+     <Button x:Name="OutlineToggleButton" Style="{StaticResource IconButton}" ToolTip="Show outline (Ctrl+Shift+L)" AutomationProperties.Name="Toggle document outline" Click="Outline_Click"><Path Data="M1,1 H15 V13 H1 Z M10,1 V13" Width="16" Height="14" Stretch="Uniform" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2"/></Button>
      <Button x:Name="MoreButton" Style="{StaticResource IconButton}" Content="&#xE712;" ToolTip="More actions" AutomationProperties.Name="More actions" Click="More_Click"/>
     </StackPanel>
     <TextBlock x:Name="DocumentName" Text="Markdown Viewer" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="16,0"/>
@@ -105,16 +106,16 @@
   <Border x:Name="Notice" Grid.Row="2" Visibility="Collapsed" Background="{DynamicResource Panel}" Padding="18,10" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
    <DockPanel><Button DockPanel.Dock="Right" Content="Dismiss" Click="NoticeClose_Click"/><TextBlock x:Name="NoticeText" TextWrapping="Wrap" VerticalAlignment="Center"/></DockPanel>
   </Border>
-  <Grid Grid.Row="3">
-   <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="260" MaxWidth="480"/><ColumnDefinition x:Name="SidebarSplitterColumn" Width="4"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-   <Border x:Name="Sidebar" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+  <Grid x:Name="NavigationLayout" Grid.Row="3">
+   <Grid.ColumnDefinitions><ColumnDefinition x:Name="FilesColumn" Width="0" MaxWidth="480"/><ColumnDefinition x:Name="FilesSplitterColumn" Width="0"/><ColumnDefinition x:Name="DocumentColumn" Width="*" MinWidth="360"/><ColumnDefinition x:Name="OutlineSplitterColumn" Width="0"/><ColumnDefinition x:Name="OutlineColumn" Width="0" MaxWidth="480"/></Grid.ColumnDefinitions>
+   <Border x:Name="FilesSidebar" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
     <Grid>
      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-     <StackPanel Orientation="Horizontal" Margin="12,14,12,4">
-      <Button x:Name="FilesTab" Content="Files" Focusable="False" Padding="12,7" Click="FilesTab_Click"/>
-      <Button x:Name="OutlineTab" Content="Outline" Focusable="False" Padding="12,7" Click="OutlineTab_Click"/>
-     </StackPanel>
-     <Grid x:Name="FolderPane" Grid.Row="1" Margin="12,8,8,8" Visibility="Collapsed">
+     <DockPanel Margin="22,12,10,4">
+      <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="11" Content="&#xE711;" Click="Files_Click" ToolTip="Hide files" AutomationProperties.Name="Hide files panel"/>
+      <TextBlock Text="FILES" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
+     </DockPanel>
+     <Grid x:Name="FolderPane" Grid.Row="1" Margin="12,8,8,8">
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <DockPanel Margin="6,0,0,10">
        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
@@ -133,9 +134,18 @@
        <Button Content="Open a folder" Click="ChooseFolder_Click" HorizontalAlignment="Left" Background="{DynamicResource Hover}" Foreground="{DynamicResource Accent}"/>
       </StackPanel>
      </Grid>
-     <Grid x:Name="OutlinePane" Grid.Row="1" Margin="16,14,16,8">
+     <StackPanel Grid.Row="2" Margin="26,12,16,16"><TextBlock Text="A little space to read." Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock Text="MARKDOWN VIEWER" Foreground="{DynamicResource Muted}" FontSize="9" Margin="0,7,0,0"/></StackPanel>
+    </Grid>
+   </Border>
+   <GridSplitter x:Name="FilesSplitter" Grid.Column="1" Width="4" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="True" DragCompleted="FilesSplitter_DragCompleted" ToolTip="Resize files panel" AutomationProperties.Name="Resize files panel"/>
+   <GridSplitter x:Name="OutlineSplitter" Grid.Column="3" Width="4" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="True" DragCompleted="OutlineSplitter_DragCompleted" ToolTip="Resize outline panel" AutomationProperties.Name="Resize outline panel"/>
+   <Border x:Name="OutlineSidebar" Grid.Column="4" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1,0,0,0">
+     <Grid x:Name="OutlinePane" Margin="12,12,10,8">
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-      <TextBlock Text="ON THIS PAGE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" Margin="10,0,0,16"/>
+      <DockPanel Margin="10,0,0,12">
+       <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="11" Content="&#xE711;" Click="Outline_Click" ToolTip="Hide outline" AutomationProperties.Name="Hide document outline"/>
+       <TextBlock Text="ON THIS PAGE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource Muted}" VerticalAlignment="Center"/>
+      </DockPanel>
       <Grid Grid.Row="1">
       <ListBox x:Name="OutlineList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" SelectionChanged="Outline_SelectionChanged" AutomationProperties.Name="Document outline">
        <ListBox.Template><ControlTemplate TargetType="ListBox">
@@ -148,10 +158,7 @@
       <TextBlock x:Name="OutlineEmpty" Text="Headings will appear here." FontSize="12" Foreground="{DynamicResource Muted}" Margin="10,8" TextWrapping="Wrap"/>
       </Grid>
      </Grid>
-     <StackPanel Grid.Row="2" Margin="26,12,16,16"><TextBlock Text="A little space to read." Foreground="{DynamicResource Muted}" FontSize="11"/><TextBlock Text="MARKDOWN VIEWER" Foreground="{DynamicResource Muted}" FontSize="9" Margin="0,7,0,0"/></StackPanel>
-    </Grid>
    </Border>
-   <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="4" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="True" DragCompleted="SidebarSplitter_DragCompleted" ToolTip="Resize sidebar"/>
    <Grid Grid.Column="2" Background="{DynamicResource Surface}">
     <wv:WebView2 x:Name="Reader" Visibility="Collapsed" DefaultBackgroundColor="White" AllowDrop="False" AllowExternalDrop="True"/>
     <Border x:Name="EditorPanel" Visibility="Collapsed" Background="{DynamicResource Surface}">

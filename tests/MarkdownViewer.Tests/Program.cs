@@ -47,7 +47,8 @@ var tests = new (string Name, Action Run)[]
     ("Links and code fences retain selected text", InsertFormatting),
     ("Folder listing filters files and loads subfolders lazily", FolderBrowsing),
     ("Folder refresh retains selection and recovers from errors", FolderRefresh),
-    ("Inactive windows preserve newer folder preferences", FolderPreferences)
+    ("Inactive windows preserve newer navigation preferences", FolderPreferences),
+    ("Legacy sidebar preferences migrate to independent panels", SidebarMigration)
 };
 
 var failures = 0;
@@ -281,18 +282,58 @@ static void FolderPreferences()
         var second = UserSettings.Load();
         first.LastFolder = "C:\\Example notes";
         first.ShowFiles = true;
+        first.ShowOutline = true;
         first.SidebarWidth = 340;
+        first.OutlineWidth = 280;
         first.Save();
         second.Save();
         var saved = UserSettings.Load();
         Equal(first.LastFolder, saved.LastFolder);
         Equal(true, saved.ShowFiles);
+        Equal(true, saved.ShowOutline);
         Equal(340d, saved.SidebarWidth);
+        Equal(280d, saved.OutlineWidth);
         var third = UserSettings.Load();
         saved.LastFolder = null;
+        saved.ShowFiles = false;
+        saved.ShowOutline = false;
         saved.Save();
         third.Save();
-        Equal<string?>(null, UserSettings.Load().LastFolder);
+        var hidden = UserSettings.Load();
+        Equal<string?>(null, hidden.LastFolder);
+        Equal(false, hidden.ShowFiles);
+        Equal(false, hidden.ShowOutline);
+    }
+    finally { StartupMetrics.ProfileDirectory = previousProfile; }
+}
+
+static void SidebarMigration()
+{
+    var previousProfile = StartupMetrics.ProfileDirectory;
+    StartupMetrics.ProfileDirectory = FolderFixture();
+    try
+    {
+        Equal(false, UserSettings.Load().ShowOutline);
+        var path = Path.Combine(UserSettings.DataDirectory, "settings.json");
+        foreach (var (json, files, outline, outlineWidth) in new[]
+        {
+            ("{\"ShowOutline\":true,\"ShowFiles\":true,\"SidebarWidth\":320}", true, false, 240d),
+            ("{\"ShowOutline\":true,\"ShowFiles\":false,\"SidebarWidth\":310}", false, true, 310d),
+            ("{\"ShowOutline\":false,\"ShowFiles\":true}", false, false, 240d)
+        })
+        {
+            File.WriteAllText(path, json);
+            var settings = UserSettings.Load();
+            Equal(files, settings.ShowFiles);
+            Equal(outline, settings.ShowOutline);
+            Equal(outlineWidth, settings.OutlineWidth);
+            settings.Save();
+            var reopened = UserSettings.Load();
+            Equal(2, reopened.LayoutVersion);
+            Equal(files, reopened.ShowFiles);
+            Equal(outline, reopened.ShowOutline);
+            Equal(outlineWidth, reopened.OutlineWidth);
+        }
     }
     finally { StartupMetrics.ProfileDirectory = previousProfile; }
 }
